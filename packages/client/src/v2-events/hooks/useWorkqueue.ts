@@ -1,0 +1,118 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import { useCallback } from 'react'
+import {
+  deserializeQuery,
+  UserOrSystem,
+  WorkqueueConfig
+} from '@opencrvs/commons/client'
+import { useCountryConfigWorkqueueConfigurations } from '../features/events/useCountryConfigWorkqueueConfigurations'
+import { useEvents } from '../features/events/useEvents/useEvents'
+import { queryClient, useTRPC } from '../trpc'
+import { useCurrentUser } from './useCurrentUser'
+
+function getDeserializedQuery(
+  workqueueConfig: WorkqueueConfig | undefined,
+  user: UserOrSystem
+) {
+  if (!workqueueConfig) {
+    throw new Error('Workqueue config not found')
+  }
+  if (!user.primaryOfficeId) {
+    throw new Error("User's primary office id not found")
+  }
+  return deserializeQuery(workqueueConfig.query, user)
+}
+
+export const useWorkqueue = (workqueueSlug: string) => {
+  // Niger : primaryOfficeId doit refléter la commune ACTIVE (bascule sans
+  // reconnexion), pas la commune permanente de l'utilisateur — voir
+  // useCurrentUser.ts. `getUser` seul ne le fait pas.
+  const { currentUser: user } = useCurrentUser()
+  const { useGetEventCountsByWorkqueue, searchEvent } = useEvents()
+
+  const workqueues = useCountryConfigWorkqueueConfigurations()
+  const workqueueConfig = workqueues.find(({ slug }) => slug === workqueueSlug)
+
+  const deserializedQueries = workqueues.map((wq) => ({
+    slug: wq.slug,
+    query: getDeserializedQuery(wq, user)
+  }))
+
+  return {
+    getResult: ({ offset, limit }: { offset: number; limit: number }) => {
+      const searchInput = {
+        query: getDeserializedQuery(workqueueConfig, user),
+        offset,
+        limit,
+        sort: [{ field: 'updatedAt', direction: 'desc' as const }]
+      }
+      return {
+        useSuspenseQuery: () =>
+          searchEvent.useSuspenseQuery(searchInput, {
+            // Tag with workqueueSlug in meta so invalidateWorkqueueSearchQueries()
+            // can target this query without extending the cache key.
+            meta: { workqueueSlug },
+            refetchInterval: 20000
+          }),
+        useQuery: () =>
+          searchEvent.useQuery(searchInput, {
+            meta: { workqueueSlug },
+            refetchInterval: 10000
+          })
+      }
+    },
+    getCount: {
+      useSuspenseQuery: () =>
+        useGetEventCountsByWorkqueue().useSuspenseQuery(deserializedQueries),
+      useQuery: () =>
+        useGetEventCountsByWorkqueue().useQuery(deserializedQueries)
+    }
+  }
+}
+
+export function useWorkqueues() {
+  const { currentUser: user } = useCurrentUser()
+  const workqueues = useCountryConfigWorkqueueConfigurations()
+  const trpc = useTRPC()
+
+  const prefetch = useCallback(async () => {
+    return Promise.all(
+      workqueues.map(async (workqueueConfig) => {
+        const searchInput = {
+          query: getDeserializedQuery(workqueueConfig, user),
+          offset: 0,
+          limit: 10,
+          sort: [{ field: 'updatedAt', direction: 'desc' as const }]
+        }
+        const options = trpc.event.search.queryOptions(searchInput)
+
+        const data = queryClient.getQueryData(options.queryKey)
+        const isFetching =
+          queryClient.isFetching({ queryKey: options.queryKey }) > 0
+
+        if (data || isFetching) {
+          return
+        }
+
+        return queryClient.prefetchQuery({
+          ...options,
+          meta: { workqueueSlug: workqueueConfig.slug }
+        })
+      })
+    )
+  }, [workqueues, user, trpc])
+
+  return {
+    prefetch
+  }
+}

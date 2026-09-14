@@ -1,0 +1,569 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import {
+  MiddlewareFunction,
+  MiddlewareResult,
+  TRPCError
+} from '@trpc/server/unstable-core-do-not-import'
+import { OpenApiMeta } from 'trpc-to-openapi'
+import {
+  ActionInputWithType,
+  ActionType,
+  ActionUpdate,
+  AnnotationActionType,
+  ApproveCorrectionActionInput,
+  DeclarationActions,
+  DeclarationUpdateActionType,
+  DeclarationUpdateActions,
+  EventConfig,
+  EventDocument,
+  EventState,
+  FieldConfig,
+  RejectCorrectionActionInput,
+  annotationActions,
+  deepDropNulls,
+  deepMerge,
+  errorMessages,
+  findRecordActionPages,
+  getActionFormFields,
+  getActionReviewFields,
+  getCurrentEventState,
+  getDeclaration,
+  getVisibleVerificationPageIds,
+  isFieldVisible,
+  isPageVisible,
+  omitHiddenFields,
+  omitHiddenPaginatedFields,
+  runFieldValidations,
+  runStructuralValidations,
+  ValidatorContext,
+  flattenFormState,
+  getCustomActionFields,
+  EventInput,
+  UUID,
+  getDeclarationFieldById
+} from '@opencrvs/commons/events'
+
+import { getEventConfigurationById } from '@events/service/config/config'
+import { RequestNotFoundError } from '@events/service/events/actions/correction'
+import { getEventById } from '@events/service/events/events'
+import { locationExists } from '@events/storage/postgres/administrative-hierarchy/locations'
+import { TrpcContext } from '@events/context'
+import {
+  getValidatorContext,
+  getInvalidUpdateKeys,
+  getVerificationPageErrors,
+  throwWhenNotEmpty,
+  omitUncorrectableFields
+} from './utils'
+
+export function getFieldErrors(
+  fields: FieldConfig[],
+  data: ActionUpdate,
+  context: ValidatorContext
+) {
+  const visibleFields = fields.filter((field) =>
+    isFieldVisible(field, data, context)
+  )
+
+  const visibleFieldIds = visibleFields.map((field) => field.id)
+
+  const hiddenFieldIds = fields
+    .filter(
+      (field) =>
+        // If field is not visible and not in the visible fields list, it is a hidden field
+        // We need to check against the visible fields list because there might be fields with same ids, one of which is visible and others are hidden
+        !isFieldVisible(field, data, context) &&
+        !visibleFieldIds.includes(field.id)
+    )
+    .map((field) => field.id)
+
+  // Add errors if there are any hidden fields sent in the payloa
+  const hiddenFieldErrors = hiddenFieldIds.flatMap((fieldId) => {
+    if (data[fieldId as keyof typeof data]) {
+      return {
+        message: errorMessages.hiddenField.defaultMessage,
+        id: fieldId,
+        value: data[fieldId as keyof typeof data]
+      }
+    }
+
+    return []
+  })
+
+  // For visible fields, run the field validations as configured
+  const visibleFieldErrors = visibleFields.flatMap((field) => {
+    const fieldErrors = flattenFormState(
+      runFieldValidations({
+        field,
+        value: data[field.id],
+        form: data,
+        context
+      })
+    ).flatMap(([, errors]) => errors)
+
+    return fieldErrors.map((error) => ({
+      message: error.message.defaultMessage,
+      id: field.id,
+      value: data[field.id as keyof typeof data]
+    }))
+  })
+
+  return [...hiddenFieldErrors, ...visibleFieldErrors]
+}
+
+function validateDeclarationUpdateAction({
+  eventConfig,
+  event,
+  actionType,
+  declarationUpdate,
+  annotation,
+  context
+}: {
+  eventConfig: EventConfig
+  event: EventDocument
+  actionType: DeclarationUpdateActionType
+  declarationUpdate: ActionUpdate
+  annotation?: ActionUpdate
+  context: ValidatorContext
+}) {
+  /*
+   * Declaration allows partial updates. Updates are validated against primitive types (zod) and field based custom validators (JSON schema).
+   * We need to validate the update against the cleaned declaration, which is a merged version of the previous declaration and the update.
+   */
+
+  const declarationConfig = getDeclaration(eventConfig)
+  // 1. Merge declaration update with previous declaration to validate based on the right conditional rules
+  const previousDeclaration = getCurrentEventState(
+    event,
+    eventConfig
+  ).declaration
+
+  // at this stage, there could be a situation where the toggle (.e.g. dob unknown) is applied but payload would still have both age and dob.
+  const mergedDeclaration = deepMerge(previousDeclaration, declarationUpdate)
+
+  // 2. Check for any invalid key that doesn't exist in declaration config
+  // getDeclarationFieldById will throw if any field is not in the declaration config
+  Object.keys(mergedDeclaration).forEach((key) => {
+    getDeclarationFieldById(eventConfig, key)
+  })
+
+  // For REQUEST_CORRECTION, `previousDeclaration` may contain uncorrectable fields that are conditionally hidden.
+  // When merged into `completeDeclaration`, these hidden uncorrectable fields would incorrectly trigger
+  // "Hidden or disabled field should not receive a value" error during invalid key check.
+  // We cannot resolve this by sending them as null in `declarationUpdate` either,
+  // because `validateCorrectableFields` below rejects any uncorrectable field in a REQUEST_CORRECTION.
+  // Stripping uncorrectable fields from `completeDeclaration` (which is previousDeclaration + declarationUpdate) entirely is the only clean solution —
+  // and it's safe because `validateCorrectableFields` already catches the case where
+  // the client wrongly includes uncorrectable fields in `declarationUpdate`.
+  const completeDeclaration = deepDropNulls(
+    actionType === ActionType.REQUEST_CORRECTION
+      ? omitUncorrectableFields(eventConfig, mergedDeclaration)
+      : mergedDeclaration
+  )
+
+  // 3. Strip declaration of hidden fields. Without additional checks, client could send an update with hidden fields that are malformed
+  // (e.g. when dob is unknown and user has send the age previously. Now they only send dob, without setting dob unknown to false).
+  const cleanedDeclaration = omitHiddenPaginatedFields(
+    declarationConfig,
+    completeDeclaration,
+    context
+  )
+
+  // 4. When the submitted declaration update has fields that are not in the cleaned declaration, payload is invalid.
+  // Only check keys from declarationUpdate (the client's input), not fields inherited from the previous state
+  // that may have become hidden due to changes in the current update.
+  const declarationUpdateOnlyComplete = Object.fromEntries(
+    Object.entries(completeDeclaration).filter(
+      ([key]) => key in declarationUpdate
+    )
+  )
+  const invalidKeys = getInvalidUpdateKeys({
+    update: declarationUpdateOnlyComplete,
+    cleaned: cleanedDeclaration
+  })
+
+  if (invalidKeys.length > 0) {
+    return invalidKeys
+  }
+
+  // 5. Validate declaration update against conditional rules, taking into account conditional pages.
+  const allVisiblePageFields = declarationConfig.pages
+    .filter((page) => isPageVisible(page, cleanedDeclaration, context))
+    .flatMap((page) => page.fields)
+
+  const declarationErrors = getFieldErrors(
+    allVisiblePageFields,
+    cleanedDeclaration,
+    context
+  )
+
+  const declarationActionParse = DeclarationActions.safeParse(actionType)
+
+  // 6. Validate against action review fields and dialog form fields, if applicable.
+  // Dialog form fields are validated with `required` relaxed: combined flows
+  // (e.g. declare+register) only collect the final action's dialog fields, so
+  // intermediate actions legitimately arrive without their own.
+  const reviewFields = declarationActionParse.success
+    ? [
+        ...getActionReviewFields(eventConfig, declarationActionParse.data),
+        ...getActionFormFields(eventConfig, declarationActionParse.data).map(
+          (formField) => ({ ...formField, required: false })
+        )
+      ]
+    : []
+
+  const visibleAnnotationFields = omitHiddenFields(
+    reviewFields,
+    deepDropNulls(annotation ?? {}),
+    context
+  )
+
+  const annotationErrors = getFieldErrors(
+    reviewFields,
+    visibleAnnotationFields,
+    { ...context, baseFormState: cleanedDeclaration }
+  )
+
+  return [...declarationErrors, ...annotationErrors]
+}
+
+function validateActionAnnotation({
+  eventConfig,
+  actionType,
+  annotation = {},
+  declaration = {},
+  context
+}: {
+  eventConfig: EventConfig
+  actionType: AnnotationActionType
+  annotation?: ActionUpdate
+  declaration: EventState
+  context: ValidatorContext
+}) {
+  const pages = findRecordActionPages(eventConfig, actionType)
+
+  const visibleVerificationPageIds = getVisibleVerificationPageIds(
+    pages,
+    annotation,
+    context
+  )
+
+  const formFields = [
+    ...pages.flatMap(({ fields }) => fields.flatMap((field) => field)),
+    ...getActionFormFields(eventConfig, actionType)
+  ]
+
+  const errors = [
+    ...getFieldErrors(formFields, annotation, {
+      ...context,
+      baseFormState: declaration
+    }),
+    ...getVerificationPageErrors(visibleVerificationPageIds, annotation)
+  ]
+
+  return errors
+}
+
+function validateCustomAction({
+  eventConfig,
+  annotation = {},
+  context,
+  customActionType
+}: {
+  eventConfig: EventConfig
+  annotation?: ActionUpdate
+  context: ValidatorContext
+  customActionType: string
+}) {
+  const customActionFields = getCustomActionFields(
+    eventConfig,
+    customActionType
+  )
+  return getFieldErrors(customActionFields, annotation, context)
+}
+
+export function validateNotifyAction({
+  eventConfig,
+  annotation = {},
+  declaration = {},
+  context
+}: {
+  eventConfig: EventConfig
+  annotation?: ActionUpdate
+  declaration: ActionUpdate
+  context: ValidatorContext
+}) {
+  const declarationConfig = getDeclaration(eventConfig)
+  const formFields = declarationConfig.pages.flatMap(({ fields }) =>
+    fields.flatMap((field) => field)
+  )
+
+  const reviewFields = [
+    ...getActionReviewFields(eventConfig, ActionType.DECLARE),
+    ...getActionFormFields(eventConfig, ActionType.NOTIFY)
+  ]
+
+  const annotationErrors = Object.entries(annotation).flatMap(
+    ([key, value]) => {
+      const field = reviewFields.find((f) => f.id === key)
+
+      if (!field) {
+        return {
+          message: errorMessages.unexpectedField.defaultMessage,
+          id: key,
+          value
+        }
+      }
+
+      const fieldErrors = runStructuralValidations({
+        field,
+        values: annotation,
+        context
+      })
+
+      return fieldErrors.map((error) => ({
+        message: error.message.defaultMessage,
+        id: field.id,
+        value: annotation[field.id]
+      }))
+    }
+  )
+
+  const declarationErrors = Object.entries(declaration).flatMap(
+    ([key, value]) => {
+      const field = formFields.find((f) => f.id === key)
+
+      if (!field) {
+        return {
+          message: errorMessages.unexpectedField.defaultMessage,
+          id: key,
+          value
+        }
+      }
+
+      const fieldErrors = runStructuralValidations({
+        field: { ...field, required: false },
+        values: declaration,
+        context,
+        actionType: ActionType.NOTIFY
+      })
+
+      return fieldErrors.map((error) => ({
+        message: error.message.defaultMessage,
+        id: field.id,
+        value: declaration[field.id]
+      }))
+    }
+  )
+
+  return [...annotationErrors, ...declarationErrors]
+}
+
+function throwIfRequestActionNotFound(
+  storedEvent: EventDocument,
+  input: ApproveCorrectionActionInput | RejectCorrectionActionInput
+) {
+  const correctionRequestAction = storedEvent.actions.find(
+    (a) => a.id === input.requestId && a.type === ActionType.REQUEST_CORRECTION
+  )
+
+  if (!correctionRequestAction) {
+    throw new RequestNotFoundError(input.requestId)
+  }
+}
+
+/*
+ * For request correction, we need to validate that the payload does not contain fields that are configured as not correctable,
+ * i.e. configured with the 'uncorrectable' flag set to true.
+ */
+function validateCorrectableFields({
+  eventConfig,
+  declarationUpdate
+}: {
+  eventConfig: EventConfig
+  declarationUpdate: ActionUpdate
+}) {
+  const declarationConfig = getDeclaration(eventConfig)
+  const formFields = declarationConfig.pages.flatMap(({ fields }) => fields)
+  const nonCorrecrableFields = formFields.filter((field) => field.uncorrectable)
+
+  const errors = Object.entries(declarationUpdate).flatMap(([key, value]) => {
+    const field = formFields.find((f) => f.id === key)
+
+    if (field && nonCorrecrableFields.includes(field)) {
+      return {
+        message: errorMessages.correctionNotAllowed.defaultMessage,
+        id: key,
+        value
+      }
+    }
+
+    return []
+  })
+
+  return errors
+}
+
+export const validateAction: MiddlewareFunction<
+  TrpcContext,
+  OpenApiMeta,
+  unknown,
+  unknown,
+  ActionInputWithType
+> = async ({ input, next, ctx }) => {
+  const actionType = input.type
+
+  const event = await getEventById(input.eventId)
+  const eventConfig = await getEventConfigurationById({
+    eventType: event.type,
+    token: ctx.token
+  })
+
+  const context = { ...(await getValidatorContext(ctx.token)), event }
+
+  const declaration = getCurrentEventState(event, eventConfig).declaration
+
+  if (actionType === ActionType.NOTIFY || actionType === ActionType.EDIT) {
+    const errors = validateNotifyAction({
+      eventConfig,
+      annotation: input.annotation,
+      declaration: input.declaration,
+      context
+    })
+
+    throwWhenNotEmpty(errors)
+    return next()
+  }
+
+  if (actionType === ActionType.REQUEST_CORRECTION) {
+    const errors = validateCorrectableFields({
+      eventConfig,
+      declarationUpdate: input.declaration
+    })
+
+    throwWhenNotEmpty(errors)
+  }
+
+  if (
+    actionType === ActionType.APPROVE_CORRECTION ||
+    actionType === ActionType.REJECT_CORRECTION
+  ) {
+    throwIfRequestActionNotFound(event, input)
+  }
+
+  if (actionType === ActionType.CUSTOM) {
+    const errors = validateCustomAction({
+      eventConfig,
+      annotation: input.annotation,
+      context,
+      customActionType: input.customActionType
+    })
+
+    throwWhenNotEmpty(errors)
+    return next()
+  }
+
+  const declarationUpdateAction = DeclarationUpdateActions.safeParse(actionType)
+
+  if (declarationUpdateAction.success) {
+    const errors = validateDeclarationUpdateAction({
+      eventConfig,
+      event,
+      declarationUpdate: input.declaration,
+      annotation: input.annotation,
+      actionType: declarationUpdateAction.data,
+      context
+    })
+
+    throwWhenNotEmpty(errors)
+    return next()
+  }
+
+  const annotationActionParse = annotationActions.safeParse(actionType)
+
+  if (annotationActionParse.success) {
+    const errors = validateActionAnnotation({
+      eventConfig,
+      annotation: input.annotation,
+      actionType: annotationActionParse.data,
+      declaration,
+      context
+    })
+
+    throwWhenNotEmpty(errors)
+    return next()
+  }
+
+  throw new Error('Trying to validate unsupported action type')
+}
+
+// When performing actions via REST API, we need to ensure that a valid 'createdAtLocation' is provided in the payload.
+// For normal users, the createdAtLocation is resolved on the backend from the user's primaryOfficeId.
+// eslint-disable-next-line no-restricted-syntax
+const requireCreatedAtLocationForSystemUser = async <
+  T extends { createdAtLocation?: UUID | null | undefined }
+>({
+  input,
+  next,
+  ctx
+}: {
+  input: T
+  next: () => Promise<MiddlewareResult<TrpcContext>>
+  ctx: TrpcContext
+}) => {
+  const { user } = ctx
+
+  if (user.type !== 'system') {
+    if (input.createdAtLocation) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'createdAtLocation is not allowed for non-system users'
+      })
+    }
+
+    return next()
+  }
+
+  if (!input.createdAtLocation) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'createdAtLocation is required and must be a valid location id'
+    })
+  }
+
+  const isLocationId = await locationExists(input.createdAtLocation)
+
+  if (!isLocationId) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'createdAtLocation must be a valid location id'
+    })
+  }
+
+  return next()
+}
+
+export const requireLocationForSystemUserEventCreate: MiddlewareFunction<
+  TrpcContext,
+  OpenApiMeta,
+  TrpcContext,
+  TrpcContext,
+  EventInput
+> = requireCreatedAtLocationForSystemUser
+
+export const requireLocationForSystemUserAction: MiddlewareFunction<
+  TrpcContext,
+  OpenApiMeta,
+  TrpcContext,
+  TrpcContext,
+  ActionInputWithType
+> = requireCreatedAtLocationForSystemUser

@@ -1,0 +1,84 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import formatISO from 'date-fns/formatISO'
+import {
+  areCertificateConditionsMet,
+  ConditionalParameters,
+  EventDocument,
+  EventState,
+  FieldConfig,
+  FieldType
+} from '@opencrvs/commons/client'
+import { useAppConfig } from '@client/v2-events/hooks/useAppConfig'
+import { useOnlineStatus } from '../../../utils'
+
+export const CERT_TEMPLATE_ID = 'certificateTemplateId'
+export const useCertificateTemplateSelectorFieldConfig = (
+  eventType: string,
+  declaration: EventState,
+  event: EventDocument
+): FieldConfig => {
+  const { certificateTemplates } = useAppConfig()
+
+  const isOnline = useOnlineStatus()
+  const declarationWithEventMetadata = {
+    $form: declaration,
+    $event: event,
+    $now: formatISO(new Date(), { representation: 'date' }),
+    $online: isOnline
+  } satisfies ConditionalParameters
+
+  // Filter out certificates that are not for the event type and are not v2 templates.
+  // Niger : les gabarits "-souche" (Volet 1) sont exclus ici — ce sont des
+  // documents internes jamais remis à un usager (voir les commentaires sur
+  // ces gabarits dans handler.ts), donc jamais un choix d'impression
+  // proposé à l'utilisateur. Ils restent accessibles par ailleurs pour
+  // l'aperçu à l'écran de l'onglet "Dossier" (voir
+  // useSoucheCertificateTemplate.ts), qui les recherche directement sans
+  // passer par ce sélecteur.
+  const validTemplates = certificateTemplates.filter(
+    (template) =>
+      template.event === eventType &&
+      template.isV2Template &&
+      !template.id.endsWith('-souche') &&
+      (!template.conditionals ||
+        areCertificateConditionsMet(
+          template.conditionals,
+          declarationWithEventMetadata
+        ))
+  )
+
+  const defaultValue = validTemplates.find((template) => template.isDefault)?.id
+
+  const options = validTemplates.map((template) => ({
+    label: template.label,
+    value: template.id
+  }))
+
+  return {
+    id: CERT_TEMPLATE_ID,
+    type: FieldType.SELECT,
+    required: true,
+    label: {
+      defaultMessage: 'Type',
+      description: 'This is the label for the field',
+      id: 'event.default.action.certificate.template.type.label'
+    },
+    noOptionsMessage: {
+      id: 'event.default.action.certificate.template.type.notFound',
+      description: 'Select certificate template options not found',
+      defaultMessage: 'No template available for this event, contact Admin'
+    },
+    defaultValue,
+    options
+  }
+}

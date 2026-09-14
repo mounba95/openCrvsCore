@@ -1,0 +1,270 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import React from 'react'
+import { defineMessages, useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
+import { useTypedSearchParams } from 'react-router-typesafe-routes/dom'
+import { CaretDown } from '@opencrvs/components/lib/Icon/all-icons'
+import { Button, DropdownMenu, Icon } from '@opencrvs/components'
+import {
+  EventConfig,
+  EventIndex,
+  getOrThrow,
+  ActionType,
+  ClientSpecificAction
+} from '@opencrvs/commons/client'
+import { useEvents } from '@client/v2-events/features/events/useEvents/useEvents'
+import { messages } from '@client/i18n/messages/views/action'
+import { useAuthentication } from '@client/utils/userUtils'
+import { useUsers } from '@client/v2-events/hooks/useUsers'
+import { flattenEventIndex, getUsersFullName } from '@client/v2-events/utils'
+import { useLocations } from '@client/v2-events/hooks/useLocations'
+import { ROUTES } from '@client/v2-events/routes'
+import { useEventConfiguration } from '@client/v2-events/features/events/useEventConfiguration'
+import { useIntlFormatMessageWithFlattenedParams } from '@client/v2-events/messages/utils'
+import { useAllowedActionConfigurations } from '../../Actions/useAllowedActionConfigurations'
+import { useEnsureAssignedToSelf } from '../../Actions/useEnsureAssignedToSelf'
+import { useUserAllowedActions } from '../../Actions/useUserAllowedActions'
+import { ActionMenuItem } from '../../Actions/utils'
+
+const historyMessages = defineMessages({
+  history: {
+    id: 'events.overview.actionMenu.history',
+    defaultMessage: 'Historique',
+    description:
+      'Label for the history (formerly "Audit" tab) menu item in the action menu'
+  }
+})
+
+/** This is the default order of actions if no actionOrder is defined in event configuration. */
+const DEFAULT_ACTION_ORDER = [
+  ActionType.REGISTER,
+  ActionType.DECLARE,
+  ActionType.EDIT,
+  ActionType.REJECT,
+  ActionType.ARCHIVE,
+  ActionType.UNARCHIVE,
+  ActionType.DELETE,
+  ActionType.MARK_AS_DUPLICATE,
+  ActionType.PRINT_CERTIFICATE,
+  ActionType.REQUEST_CORRECTION,
+  ClientSpecificAction.REVIEW_CORRECTION_REQUEST,
+  ActionType.CUSTOM,
+  ActionType.UNASSIGN,
+  ActionType.READ
+]
+
+export function sortActions(
+  actionMenuItems: ActionMenuItem[],
+  eventConfiguration: EventConfig
+) {
+  const sortedByDefault = actionMenuItems.sort(
+    (a, b) =>
+      DEFAULT_ACTION_ORDER.indexOf(a.type) -
+      DEFAULT_ACTION_ORDER.indexOf(b.type)
+  )
+
+  const actionOrder = eventConfiguration.actionOrder
+
+  if (!actionOrder) {
+    return sortedByDefault
+  }
+
+  const getActionIndex = (item: ActionMenuItem) => {
+    // `REVIEW_CORRECTION_REQUEST` is a client-specific action that is not part
+    // of `actionOrder`. Since it and `REQUEST_CORRECTION` are never available
+    // at the same time, sort it at the same position as `REQUEST_CORRECTION`.
+    if (item.type === ClientSpecificAction.REVIEW_CORRECTION_REQUEST) {
+      return actionOrder.indexOf(ActionType.REQUEST_CORRECTION)
+    }
+
+    if ('customActionType' in item && item.customActionType) {
+      return actionOrder.indexOf(item.customActionType)
+    }
+
+    return actionOrder.indexOf(item.type)
+  }
+
+  return sortedByDefault.sort((a, b) => getActionIndex(a) - getActionIndex(b))
+}
+
+function ActionMenuItems({
+  items,
+  eventConfiguration,
+  eventIndex,
+  backTo,
+  onAction
+}: {
+  items: ActionMenuItem[]
+  eventConfiguration: EventConfig
+  eventIndex: EventIndex
+  backTo?: string
+  onAction?: () => void
+}) {
+  const sortedActions = sortActions(items, eventConfiguration)
+  const intl = useIntlFormatMessageWithFlattenedParams()
+
+  if (sortedActions.length === 0) {
+    return (
+      <DropdownMenu.Label>
+        <i>{intl.formatMessage(messages.noActionsAvailable)}</i>
+      </DropdownMenu.Label>
+    )
+  }
+
+  return sortedActions.map((action) => {
+    return (
+      <DropdownMenu.Item
+        key={
+          'customActionType' in action ? action.customActionType : action.type
+        }
+        disabled={'disabled' in action ? action.disabled : false}
+        onClick={async () => {
+          await action.onClick(backTo)
+          onAction?.()
+        }}
+      >
+        <Icon color="currentColor" name={action.icon} size="small" />
+        {intl.formatMessage(action.label, flattenEventIndex(eventIndex))}
+      </DropdownMenu.Item>
+    )
+  })
+}
+
+export function ActionMenu({
+  eventId,
+  onAction
+}: {
+  eventId: string
+  onAction?: () => void
+}) {
+  const intl = useIntl()
+  const navigate = useNavigate()
+  const [{ backTo }] = useTypedSearchParams(ROUTES.V2.EVENTS.EVENT)
+  const { getUsers } = useUsers()
+  const { getLocations } = useLocations()
+  const locations = getLocations.useSuspenseQuery()
+
+  const { searchEventById } = useEvents()
+
+  const maybeAuth = useAuthentication()
+  const auth = getOrThrow(
+    maybeAuth,
+    'Authentication is not available but is required'
+  )
+
+  const getEventQuery = searchEventById.useSuspenseQuery(eventId)
+
+  const eventResults = getEventQuery
+
+  if (eventResults.total === 0) {
+    throw new Error(`Event ${eventId} not found`)
+  }
+
+  const eventIndex = eventResults.results[0]
+
+  if (!eventIndex) {
+    throw new Error(`Event ${eventId} not found`)
+  }
+
+  const assignedToUser = getUsers.useQueryById(eventIndex.assignedTo || '', {
+    enabled: !!eventIndex.assignedTo
+  }).data
+
+  const assignedUserFullName = assignedToUser
+    ? getUsersFullName(assignedToUser.name)
+    : ''
+
+  const assignedOffice = assignedToUser?.primaryOfficeId
+  const assignedOfficeName =
+    (assignedOffice && locations.get(assignedOffice)?.name) || ''
+
+  const [modals, actionMenuItems] = useAllowedActionConfigurations(eventIndex)
+  const ensureAssignedToSelf = useEnsureAssignedToSelf(eventIndex.id)
+  // Niger : "Historique" réservé à l'Agent Vérificateur et aux Admins —
+  // record.correct est le scope qui les distingue de l'Agent de Saisie et
+  // de l'OEC, ni l'un ni l'autre ne l'ayant.
+  const { isActionAllowed } = useUserAllowedActions(eventIndex)
+  const canSeeHistory = isActionAllowed(ActionType.REQUEST_CORRECTION)
+
+  const { eventConfiguration } = useEventConfiguration(eventIndex.type)
+
+  const assignedToOther =
+    eventIndex.assignedTo && eventIndex.assignedTo !== auth.sub
+
+  return (
+    <>
+      <DropdownMenu id="action">
+        <DropdownMenu.Trigger asChild>
+          <Button
+            data-testid="action-dropdownMenu"
+            size="medium"
+            type="primary"
+          >
+            {intl.formatMessage(messages.action)} <CaretDown />
+          </Button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Content>
+          {assignedToOther && (
+            <>
+              <DropdownMenu.Label>
+                {intl.formatMessage(messages.assignedTo, {
+                  name: assignedUserFullName,
+                  officeName: assignedOfficeName
+                })}
+              </DropdownMenu.Label>
+              <DropdownMenu.Separator />
+            </>
+          )}
+          <ActionMenuItems
+            backTo={backTo}
+            eventConfiguration={eventConfiguration}
+            eventIndex={eventIndex}
+            items={actionMenuItems}
+            onAction={onAction}
+          />
+          {canSeeHistory && (
+            <>
+              <DropdownMenu.Separator />
+              <DropdownMenu.Item
+                key="history"
+                onClick={async () => {
+                  // Niger : l'historique exige que l'acte soit assigné à soi
+                  // (voir `useEventOverviewInfo.ts`, `shouldShowFullOverview`) —
+                  // sans ça, la page affichait un rectangle gris vide au lieu du
+                  // tableau, puisque ce lien de navigation directe ne passait pas
+                  // (contrairement aux autres actions du menu) par l'assignation
+                  // automatique au premier clic.
+                  const canProceed = await ensureAssignedToSelf()
+                  if (!canProceed) {
+                    return
+                  }
+                  navigate(
+                    ROUTES.V2.EVENTS.EVENT.AUDIT.buildPath(
+                      { eventId: eventIndex.id },
+                      { backTo }
+                    )
+                  )
+                  onAction?.()
+                }}
+              >
+                <Icon color="currentColor" name="Clock" size="small" />
+                {intl.formatMessage(historyMessages.history)}
+              </DropdownMenu.Item>
+            </>
+          )}
+        </DropdownMenu.Content>
+      </DropdownMenu>
+      {modals}
+    </>
+  )
+}

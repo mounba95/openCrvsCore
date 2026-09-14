@@ -1,0 +1,140 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import type { Meta, StoryObj } from '@storybook/react'
+import { expect, within } from '@storybook/test'
+import React from 'react'
+import styled from 'styled-components'
+import { noop } from 'lodash'
+import {
+  FieldType,
+  TENNIS_CLUB_DECLARATION_FORM
+} from '@opencrvs/commons/client'
+import {
+  FormFieldGenerator,
+  FormFieldGeneratorPropsWithoutRef
+} from '@client/v2-events/components/forms/FormFieldGenerator'
+import { TRPCProvider } from '@client/v2-events/trpc'
+import { Review } from '@client/v2-events/features/events/components/Review'
+import { withValidatorContext } from '../../../../../.storybook/decorators'
+
+const meta: Meta<FormFieldGeneratorPropsWithoutRef> = {
+  title: 'Inputs/Checkbox',
+  decorators: [
+    (Story, context) => (
+      <TRPCProvider>
+        <Story {...context} />
+      </TRPCProvider>
+    ),
+    withValidatorContext
+  ]
+}
+
+export default meta
+
+const StyledFormFieldGenerator = styled(FormFieldGenerator)`
+  width: 400px;
+`
+
+type Story = StoryObj<FormFieldGeneratorPropsWithoutRef>
+
+export const CheckboxInput: Story = {
+  name: 'Checkbox input',
+  parameters: {
+    layout: 'centered'
+  },
+  render: function Component(args) {
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={[
+          {
+            id: 'storybook.checkbox',
+            type: FieldType.CHECKBOX,
+            defaultValue: false,
+            label: {
+              id: 'storybook.checkbox.label',
+              defaultMessage: 'Is my question true?',
+              description: 'The title for the checkbox input'
+            }
+          }
+        ]}
+        id="my-form"
+      />
+    )
+  }
+}
+
+export const CheckedCheckboxShouldAppearOnReview: StoryObj<typeof Review.Body> =
+  {
+    parameters: {
+      layout: 'center'
+    },
+    render: function Component(args) {
+      return (
+        <div>
+          <Review.Body
+            {...args}
+            form={{ 'recommender.none': true }}
+            formConfig={TENNIS_CLUB_DECLARATION_FORM}
+            title="Checkbox review"
+            // eslint-disable-next-line no-console
+            onEdit={(values) => console.log(values)}
+          >
+            <div />
+          </Review.Body>
+        </div>
+      )
+    },
+    play: async ({ canvasElement }) => {
+      const canvas = within(canvasElement)
+
+      await canvas.findByText(/Checkbox review?/)
+
+      await expect(canvas.queryByText('No recommender')).toBeInTheDocument()
+      await expect(
+        canvas.queryByTestId('row-value-recommender.none')
+      ).toHaveTextContent('Yes')
+    }
+  }
+
+export const UncheckedCheckboxShouldNotAppearOnReview: StoryObj<
+  typeof Review.Body
+> = {
+  parameters: {
+    layout: 'center'
+  },
+  render: function Component(args) {
+    return (
+      <div>
+        <Review.Body
+          {...args}
+          form={{}}
+          formConfig={TENNIS_CLUB_DECLARATION_FORM}
+          title="Checkbox review"
+          onEdit={noop}
+        >
+          <div />
+        </Review.Body>
+      </div>
+    )
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+
+    await canvas.findByText(/Checkbox review?/)
+
+    await expect(await canvas.findByText('No recommender')).toBeInTheDocument()
+    await expect(
+      (await canvas.findByTestId('row-value-recommender.none')).textContent
+    ).toEqual('No')
+  }
+}

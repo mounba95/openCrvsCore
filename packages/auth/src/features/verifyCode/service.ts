@@ -1,0 +1,131 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import { redis } from '@auth/database'
+import { JWT_ISSUER } from '@auth/constants'
+import { env } from '@auth/environment'
+import * as crypto from 'crypto'
+import { createToken } from '@auth/features/authenticate/service'
+import {
+  triggerUserEventNotification,
+  UserName,
+  TriggerEvent,
+  TokenUserType
+} from '@opencrvs/commons'
+
+interface ICodeDetails {
+  code: string
+  createdAt: number
+}
+
+export enum NotificationEvent {
+  TWO_FACTOR_AUTHENTICATION = 'TWO_FACTOR_AUTHENTICATION',
+  PASSWORD_RESET = 'PASSWORD_RESET'
+}
+
+type SixDigitVerificationCode = string
+
+export async function storeVerificationCode(nonce: string, code: string) {
+  const codeDetails = {
+    code,
+    createdAt: Date.now()
+  }
+
+  await redis.set(`verification_${nonce}`, JSON.stringify(codeDetails))
+}
+
+export async function generateVerificationCode(
+  nonce: string
+): Promise<SixDigitVerificationCode> {
+  const code = crypto.randomInt(100000, 999999).toString()
+  await storeVerificationCode(nonce, code)
+  return code
+}
+
+export async function getVerificationCodeDetails(
+  nonce: string
+): Promise<ICodeDetails> {
+  const codeDetails = await redis.get(`verification_${nonce}`)
+
+  if (!codeDetails) {
+    throw new Error('Auth code not found')
+  }
+
+  return JSON.parse(codeDetails) as ICodeDetails
+}
+
+export function generateNonce() {
+  return crypto.randomBytes(16).toString('base64').toString()
+}
+
+export async function sendVerificationCode(
+  verificationCode: string,
+  notificationEvent: NotificationEvent,
+  name: UserName,
+  mobile?: string,
+  email?: string
+): Promise<void> {
+  await triggerUserEventNotification({
+    event:
+      notificationEvent === NotificationEvent.TWO_FACTOR_AUTHENTICATION
+        ? TriggerEvent.TWO_FA
+        : TriggerEvent.RESET_PASSWORD,
+    payload: {
+      code: verificationCode,
+      recipient: {
+        name,
+        mobile,
+        email
+      }
+    },
+    countryConfigUrl: env.COUNTRY_CONFIG_URL_INTERNAL,
+    authHeader: {
+      Authorization: `Bearer ${await createToken(
+        'auth',
+        [],
+        ['opencrvs:countryconfig-user'],
+        JWT_ISSUER,
+        undefined,
+        TokenUserType.enum.system
+      )}`
+    }
+  })
+  return undefined
+}
+
+export async function checkVerificationCode(
+  nonce: string,
+  code: string
+): Promise<void> {
+  const codeDetails: ICodeDetails = await getVerificationCodeDetails(nonce)
+
+  if (!codeDetails) {
+    throw new Error('Auth code not found')
+  }
+
+  const codeExpired =
+    (Date.now() - codeDetails.createdAt) / 1000 >=
+    env.CONFIG_SMS_CODE_EXPIRY_SECONDS
+
+  if (code !== codeDetails.code) {
+    throw new Error('Auth code invalid')
+  }
+
+  if (codeExpired) {
+    throw new Error('Auth code expired')
+  }
+}
+
+export async function deleteUsedVerificationCode(
+  nonce: string
+): Promise<boolean> {
+  const count = await redis.del(`verification_${nonce}`)
+  return Boolean(count)
+}

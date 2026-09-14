@@ -1,0 +1,271 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import { TRPCError } from '@trpc/server'
+import {
+  ActionType,
+  generateUuid,
+  TENNIS_CLUB_MEMBERSHIP
+} from '@opencrvs/commons/events'
+import { encodeScope } from '@opencrvs/commons'
+import {
+  createSystemTestClient,
+  createTestClient,
+  setupTestCase,
+  TEST_SYSTEM_ID
+} from '@events/tests/utils'
+
+describe('event.create', () => {
+  describe('authorization', () => {
+    test(`prevents forbidden access if missing required scope`, async () => {
+      const { user, generator } = await setupTestCase()
+      const client = createTestClient(user, [])
+
+      await expect(
+        client.event.create(generator.event.create())
+      ).rejects.toMatchObject(new TRPCError({ code: 'FORBIDDEN' }))
+    })
+
+    test(`allows access with required scope`, async () => {
+      const { user, generator } = await setupTestCase()
+      const client = createTestClient(user, [
+        encodeScope({
+          type: 'record.create'
+        })
+      ])
+
+      await expect(
+        client.event.create(generator.event.create())
+      ).resolves.not.toThrow()
+    })
+
+    test('dont allow access with API scope with incorrect event type', async () => {
+      const { user, generator } = await setupTestCase()
+      const client = createTestClient(user, [
+        encodeScope({
+          type: 'record.create',
+          options: { event: ['some-event-type'] }
+        })
+      ])
+
+      await expect(
+        client.event.create(generator.event.create())
+      ).rejects.toMatchObject(new TRPCError({ code: 'FORBIDDEN' }))
+    })
+
+    test('allows access with API scope with correct event type', async () => {
+      const { user, generator } = await setupTestCase()
+      const client = createTestClient(user, [
+        encodeScope({
+          type: 'record.create',
+          options: { event: [TENNIS_CLUB_MEMBERSHIP] }
+        })
+      ])
+
+      await expect(
+        client.event.create(generator.event.create())
+      ).resolves.not.toThrow()
+    })
+  })
+
+  test('event can be created and fetched', async () => {
+    const { user, generator } = await setupTestCase()
+    const client = createTestClient(user, [
+      encodeScope({
+        type: 'record.create',
+        options: { event: [TENNIS_CLUB_MEMBERSHIP] }
+      }),
+      encodeScope({
+        type: 'record.read',
+        options: { event: [TENNIS_CLUB_MEMBERSHIP] }
+      })
+    ])
+    const event = await client.event.create(generator.event.create())
+
+    const fetchedEvent = await client.event.get({ eventId: event.id })
+
+    const fetchedEventWithoutReadAction = fetchedEvent.actions.slice(0, -1)
+    expect(fetchedEventWithoutReadAction).toEqual(event.actions)
+    expect(fetchedEvent.actions.length).toEqual(3)
+
+    expect(fetchedEvent.actions).toEqual([
+      expect.objectContaining({ type: ActionType.CREATE }),
+      expect.objectContaining({ type: ActionType.ASSIGN }),
+      expect.objectContaining({
+        type: ActionType.READ
+      })
+    ])
+  })
+
+  test('created event should have be assigned a random 6 character tracking ID', async () => {
+    const { user, generator } = await setupTestCase()
+    const client = createTestClient(user, [
+      encodeScope({
+        type: 'record.create',
+        options: { event: [TENNIS_CLUB_MEMBERSHIP] }
+      }),
+      encodeScope({
+        type: 'record.read',
+        options: { event: [TENNIS_CLUB_MEMBERSHIP] }
+      })
+    ])
+    const event = await client.event.create(generator.event.create())
+
+    // trackingId should be 6 characters long and include only uppercase letters and numbers
+    expect(event.trackingId).toMatch(/^[A-Z0-9]{6}$/)
+
+    const fetchedEvent = await client.event.get({ eventId: event.id })
+    expect(fetchedEvent.trackingId).toMatch(/^[A-Z0-9]{6}$/)
+  })
+
+  test('creating an event is an idempotent operation', async () => {
+    const { user, generator, eventsDb } = await setupTestCase()
+    const client = createTestClient(user, [
+      encodeScope({
+        type: 'record.create'
+      })
+    ])
+
+    const payload = generator.event.create()
+    await client.event.create(payload)
+    await client.event.create(payload)
+    const events = await eventsDb.selectFrom('events').selectAll().execute()
+    expect(events).toHaveLength(1)
+  })
+
+  test('event with unknown type cannot be created', async () => {
+    const { user, generator } = await setupTestCase()
+    const client = createTestClient(user, [
+      encodeScope({
+        type: 'record.create',
+        options: { event: ['EVENT_TYPE_THAT_DOES_NOT_EXIST'] }
+      })
+    ])
+    await expect(
+      client.event.create(
+        generator.event.create({
+          type: 'EVENT_TYPE_THAT_DOES_NOT_EXIST'
+        })
+      )
+    ).rejects.toThrowErrorMatchingSnapshot()
+  })
+
+  describe('system user', () => {
+    test('should not allow system user to create event if required scopes are not present', async () => {
+      const { generator } = await setupTestCase()
+      const client = createSystemTestClient(TEST_SYSTEM_ID, [])
+      await expect(
+        client.event.create(generator.event.create())
+      ).rejects.toMatchObject(new TRPCError({ code: 'FORBIDDEN' }))
+    })
+
+    test('should not allow system user to create event if createdAtLocation is not defined', async () => {
+      const { generator } = await setupTestCase()
+      const client = createSystemTestClient(TEST_SYSTEM_ID, [
+        encodeScope({
+          type: 'record.create',
+          options: { event: [TENNIS_CLUB_MEMBERSHIP] }
+        })
+      ])
+
+      await expect(
+        client.event.create(generator.event.create())
+      ).rejects.toMatchObject(
+        new TRPCError({
+          code: 'BAD_REQUEST',
+          message:
+            'createdAtLocation is required and must be a valid location id'
+        })
+      )
+    })
+
+    test('should prevent system user to create event when createdAtLocation is invalid', async () => {
+      const { generator } = await setupTestCase()
+      const client = createSystemTestClient(TEST_SYSTEM_ID, [
+        encodeScope({
+          type: 'record.create',
+          options: { event: [TENNIS_CLUB_MEMBERSHIP] }
+        })
+      ])
+
+      await expect(
+        client.event.create({
+          ...generator.event.create(),
+          createdAtLocation: generateUuid()
+        })
+      ).rejects.toMatchObject(
+        new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'createdAtLocation must be a valid location id'
+        })
+      )
+    })
+
+    test('should allow system user to create when createdAtLocation is defined', async () => {
+      const { generator, locations } = await setupTestCase()
+      const client = createSystemTestClient(TEST_SYSTEM_ID, [
+        encodeScope({
+          type: 'record.create',
+          options: { event: [TENNIS_CLUB_MEMBERSHIP] }
+        })
+      ])
+
+      const response = await client.event.create({
+        ...generator.event.create(),
+        createdAtLocation: locations[0].id
+      })
+
+      expect(response.actions).toBeDefined()
+
+      expect(response.actions.length).toEqual(1)
+      expect(response.actions).toEqual([
+        expect.objectContaining({
+          type: ActionType.CREATE,
+          createdAtLocation: locations[0].id
+        })
+      ])
+    })
+
+    test('event created by system user should not have assignment action', async () => {
+      const { generator, user, locations } = await setupTestCase()
+      const systemClient = createSystemTestClient(TEST_SYSTEM_ID, [
+        encodeScope({
+          type: 'record.create',
+          options: { event: [TENNIS_CLUB_MEMBERSHIP] }
+        })
+      ])
+      const event = await systemClient.event.create({
+        ...generator.event.create(),
+        createdAtLocation: locations[0].id
+      })
+
+      const userClient = createTestClient(user, [
+        encodeScope({
+          type: 'record.read',
+          options: { event: [TENNIS_CLUB_MEMBERSHIP] }
+        })
+      ])
+
+      const fetchedEvent = await userClient.event.get({ eventId: event.id })
+
+      const fetchedEventWithoutReadAction = fetchedEvent.actions.slice(0, -1)
+      expect(fetchedEventWithoutReadAction).toEqual(event.actions)
+      expect(fetchedEvent.actions.length).toEqual(2)
+      expect(fetchedEvent.actions).toEqual([
+        expect.objectContaining({
+          type: ActionType.CREATE,
+          createdAtLocation: locations[0].id
+        }),
+        expect.objectContaining({ type: ActionType.READ })
+      ])
+    })
+  })
+})

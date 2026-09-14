@@ -1,0 +1,126 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import { Client } from 'pg'
+import { inject, vi } from 'vitest'
+import {
+  getDeclarationFields,
+  TENNIS_CLUB_MEMBERSHIP
+} from '@opencrvs/commons/events'
+import { tennisClubMembershipEvent } from '@opencrvs/commons/fixtures'
+import {
+  getPool,
+  resetServer as resetEventsPostgresServer
+} from '@events/storage/postgres/events'
+
+import { createIndex } from '@events/service/indexing/indexing'
+import {
+  getReindexingStatusIndexName,
+  getTemporaryIndexName
+} from '@events/storage/__mocks__/elasticsearch'
+import { getOrCreateClient } from '@events/storage/elasticsearch'
+import { mswServer } from './msw'
+import { createDatabase, initializeSchemaAccess, migrate } from './postgres'
+
+vi.mock('@events/storage/elasticsearch')
+
+// Tracks the unique id used by this worker's previous test run so we can
+// clean up only our own indices without affecting other concurrent workers.
+let previousId: string | null = null
+
+async function resetESServer() {
+  const { getEventIndexName, getEventAliasName } = await import(
+    // @ts-expect-error - "Cannot find module '@events/storage/elasticsearch' or its corresponding type declarations."
+    '@events/storage/elasticsearch'
+  )
+  const id = Date.now() + Math.random()
+
+  getEventIndexName.mockImplementation((type: string) => type + '_' + id)
+  getEventAliasName.mockReturnValue('events_' + id)
+  getReindexingStatusIndexName.mockReturnValue('reindexing_status_' + id)
+  getTemporaryIndexName.mockImplementation(
+    (eventType: string, timestamp: number) => {
+      return `${getEventIndexName(eventType)}_${timestamp}`
+    }
+  )
+
+  const client = getOrCreateClient()
+
+  // Delete indices created by this worker's previous test run to prevent
+  // shard accumulation. The id is unique per beforeEach call and is embedded
+  // in every index name, so `*<id>*` matches all indices from that run
+  // without touching indices owned by other concurrent workers.
+  if (previousId !== null) {
+    try {
+      await client.indices.delete({ index: `*${previousId}*` })
+    } catch {
+      // Indices may already be gone
+    }
+  }
+  previousId = String(id)
+
+  await client.cluster.putSettings({
+    body: {
+      persistent: {
+        'action.auto_create_index': 'false'
+      }
+    }
+  })
+
+  // Create concrete indices
+  await createIndex(
+    getEventIndexName(TENNIS_CLUB_MEMBERSHIP),
+    getDeclarationFields(tennisClubMembershipEvent)
+  )
+}
+
+async function resetPostgresServer() {
+  const targetDb = `events_${Date.now()}_${Math.random()}`
+
+  const EVENTS_APP_POSTGRES_URI = `postgres://events_app:app_password@${inject('POSTGRES_URI')}/${targetDb}`
+
+  const clusterInitializer = new Client({
+    connectionString: `postgres://postgres:postgres@${inject('POSTGRES_URI')}/postgres`
+  })
+  await clusterInitializer.connect()
+  await createDatabase(clusterInitializer, targetDb)
+  await clusterInitializer.end()
+
+  const databaseInitializer = new Client({
+    connectionString: `postgres://postgres:postgres@${inject('POSTGRES_URI')}/${targetDb}`
+  })
+  await databaseInitializer.connect()
+  await migrate(databaseInitializer)
+  await initializeSchemaAccess(databaseInitializer)
+  await databaseInitializer.end()
+
+  await resetEventsPostgresServer()
+  getPool(EVENTS_APP_POSTGRES_URI)
+}
+
+beforeEach(async () => Promise.all([resetPostgresServer(), resetESServer()]))
+
+beforeAll(() =>
+  mswServer.listen({
+    onUnhandledRequest: (req) => {
+      const isElasticResetCall =
+        req.method === 'DELETE' && req.url.includes(inject('ELASTICSEARCH_URI'))
+
+      if (!isElasticResetCall) {
+        // eslint-disable-next-line no-console
+        console.warn(`Unmocked request: ${req.method} ${req.url}`)
+      }
+    }
+  })
+)
+afterEach(() => {
+  mswServer.resetHandlers()
+})
+afterAll(() => mswServer.close())

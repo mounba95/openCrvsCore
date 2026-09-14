@@ -1,0 +1,444 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import React, { useRef } from 'react'
+import { defineMessages, useIntl } from 'react-intl'
+import { Navigate, useNavigate } from 'react-router-dom'
+import { v4 as uuid } from 'uuid'
+import styled from 'styled-components'
+import {
+  useTypedParams,
+  useTypedSearchParams
+} from 'react-router-typesafe-routes/dom'
+import ReactTooltip from 'react-tooltip'
+import toast from 'react-hot-toast'
+import { useSelector } from 'react-redux'
+import {
+  ActionType,
+  EventConfig,
+  getOrThrow,
+  getAcceptedActions,
+  getUUID,
+  PrintCertificateAction,
+  TokenUserType,
+  User,
+  getCurrentEventState
+} from '@opencrvs/commons/client'
+import {
+  Box,
+  Button,
+  Content,
+  Frame,
+  Icon,
+  Dialog,
+  Spinner,
+  Stack,
+  Toast
+} from '@opencrvs/components'
+import { Print } from '@opencrvs/components/lib/icons'
+import { ROUTES } from '@client/v2-events/routes'
+import { useEvents } from '@client/v2-events/features/events/useEvents/useEvents'
+import { useModal } from '@client/v2-events/hooks/useModal'
+import { FormLayout } from '@client/v2-events/layouts'
+import { usePrintableCertificate } from '@client/v2-events/hooks/usePrintableCertificate'
+import { useAppConfig } from '@client/v2-events/hooks/useAppConfig'
+import { useUsers } from '@client/v2-events/hooks/useUsers'
+import { useLocations } from '@client/v2-events/hooks/useLocations'
+import { getUserIdsFromActions } from '@client/v2-events/utils'
+import { useActionAnnotation } from '@client/v2-events/features/events/useActionAnnotation'
+import { validationErrorsInActionFormExist } from '@client/v2-events/components/forms/validation'
+import { useEventConfiguration } from '@client/v2-events/features/events/useEventConfiguration'
+import { useOnlineStatus } from '@client/utils'
+import { getUserDetails } from '@client/profile/profileSelectors'
+import { useUserAllowedActions } from '@client/v2-events/features/workqueues/Actions/useUserAllowedActions'
+import { useValidatorContext } from '@client/v2-events/hooks/useValidatorContext'
+import { useAdministrativeAreas } from '../../../../hooks/useAdministrativeAreas'
+
+const CertificateContainer = styled.div`
+  svg {
+    /* limits the certificate overflowing on small screens */
+    max-width: 100%;
+  }
+`
+
+/*
+ * Niger : Box's own 24px padding was stacking on top of the certificate's
+ * own printed margin (baked into the SVG itself), making the on-screen
+ * preview look smaller/emptier than the real printed page — purely a
+ * preview artifact, since the actual PDF is generated from the raw SVG
+ * string, not this padded wrapper. Removed so the preview reflects the
+ * real printed proportions.
+ */
+const CertificatePreviewBox = styled(Box)`
+  padding: 0;
+`
+
+const TooltipContainer = styled.div`
+  width: 100%;
+`
+
+const TooltipMessage = styled.p`
+  ${({ theme }) => theme.fonts.reg19};
+  max-width: 200px;
+`
+
+const messages = defineMessages({
+  printTitle: {
+    id: 'printAction.title',
+    defaultMessage: 'Print certificate',
+    description: 'The title for print action'
+  },
+  printDescription: {
+    id: 'printAction.description',
+    defaultMessage:
+      'Please confirm that the informant has reviewed that the information on the certificate is correct and that it is ready to print.',
+    description: 'The description for print action'
+  },
+  printAndIssueModalTitle: {
+    id: 'print.certificate.review.printAndIssueModalTitle',
+    defaultMessage: 'Print certified copy?',
+    description: 'Print and issue certificate modal title text'
+  },
+  printAndIssueModalBody: {
+    id: 'print.certificate.review.modal.body.printAndIssue',
+    defaultMessage:
+      'This will generate a certified copy of the record for printing.',
+    description: 'Print certificate modal body text'
+  },
+  makeCorrection: {
+    id: 'print.certificate.button.makeCorrection',
+    defaultMessage: 'No, make correction',
+    description: 'The label for correction button of print action'
+  },
+  confirmPrint: {
+    id: 'print.certificate.button.confirmPrint',
+    defaultMessage: 'Yes, print certificate',
+    description: 'The text for print button'
+  },
+  cancel: {
+    id: 'buttons.cancel',
+    defaultMessage: 'Cancel',
+    description: 'Cancel button text in the modal'
+  },
+  print: {
+    id: 'buttons.print',
+    defaultMessage: 'Print',
+    description: 'Print button text'
+  },
+  onlineOnly: {
+    id: 'print.certificate.onlineOnly',
+    defaultMessage:
+      'Print certificate is an online only action. Please go online to print the certificate',
+    description: 'Print certificate online only message'
+  },
+  toastMessage: {
+    id: 'print.certificate.toast.message',
+    defaultMessage: 'Certificate is ready to print',
+    description: 'Floating Toast message upon certificate ready to print'
+  }
+})
+
+function getPrintForm(configuration: EventConfig) {
+  const actionConfig = configuration.actions.find(
+    (a) => a.type === ActionType.PRINT_CERTIFICATE
+  )
+
+  return getOrThrow(
+    actionConfig?.printForm,
+    `No form found for action: ${ActionType.PRINT_CERTIFICATE}`
+  )
+}
+
+export function Review() {
+  const { eventId } = useTypedParams(ROUTES.V2.EVENTS.PRINT_CERTIFICATE.REVIEW)
+  const [{ templateId, backTo }] = useTypedSearchParams(
+    ROUTES.V2.EVENTS.PRINT_CERTIFICATE.REVIEW
+  )
+
+  const { getAnnotation } = useActionAnnotation()
+  const annotation = getAnnotation()
+
+  if (!templateId) {
+    throw new Error('Please select a template from the previous step')
+  }
+  const intl = useIntl()
+  const navigate = useNavigate()
+  const isOnline = useOnlineStatus()
+  const isOnlineRef = useRef(isOnline)
+  isOnlineRef.current = isOnline
+  const [modal, openModal] = useModal()
+
+  const {
+    getEvent,
+    onlineActions,
+    actions: { assignment }
+  } = useEvents()
+  const fullEvent = getEvent.getFromCache(eventId)
+  const { eventConfiguration } = useEventConfiguration(fullEvent.type)
+  const fullEventIndex = getCurrentEventState(fullEvent, eventConfiguration)
+  const validatorContext = useValidatorContext(fullEvent)
+  const actions = getAcceptedActions(fullEvent)
+
+  const userIds = getUserIdsFromActions(actions)
+
+  const { getUsers } = useUsers()
+  const [users] = getUsers.useSuspenseQuery(userIds)
+
+  const { getLocations } = useLocations()
+  const { getAdministrativeAreas } = useAdministrativeAreas()
+  const locations = getLocations.useSuspenseQuery()
+  const administrativeAreas = getAdministrativeAreas.useSuspenseQuery()
+
+  const { certificateTemplates, language } = useAppConfig()
+  const certificateConfig = certificateTemplates.find(
+    (template) => template.id === templateId
+  )
+
+  const formConfig = getPrintForm(eventConfiguration)
+  const { isActionAllowed } = useUserAllowedActions(fullEventIndex)
+  const userDetails = useSelector(getUserDetails)
+  const { isPending } = onlineActions.printCertificate
+
+  if (!userDetails) {
+    throw new Error('User details are not available')
+  }
+
+  const userFromUsersList = users.find((user) => user.id === userDetails.id) as
+    | User
+    | undefined
+  if (!userFromUsersList) {
+    throw new Error(`User with id ${userDetails.id} not found in users list`)
+  }
+
+  const actionsWithAnOptimisticPrintAction = actions.concat({
+    type: ActionType.PRINT_CERTIFICATE,
+    id: getUUID(),
+    transactionId: getUUID(),
+    createdByUserType: TokenUserType.enum.user,
+    createdAt: new Date().toISOString(),
+    createdBy: userFromUsersList.id,
+    createdByRole: userFromUsersList.role,
+    status: 'Accepted',
+    declaration: {},
+    annotation,
+    originalActionId: null,
+    createdBySignature: userFromUsersList.signature,
+    createdAtLocation: userDetails.primaryOfficeId,
+    content: {
+      templateId: certificateConfig?.id
+    }
+  } satisfies PrintCertificateAction)
+
+  const { svgCode, preparePdfCertificate } = usePrintableCertificate({
+    event: { ...fullEvent, actions: actionsWithAnOptimisticPrintAction },
+    config: eventConfiguration,
+    locations,
+    administrativeAreas,
+    users,
+    certificateConfig,
+    language,
+    // Niger : sur cette page, l'OEC signataire a déjà été choisi (étape
+    // précédente du même flux) — l'aperçu doit donc déjà refléter le titre
+    // et le bloc "Certifiée conforme" définitifs, pas attendre la
+    // confirmation finale.
+    review: false
+  })
+  /**
+   * If there are validation errors in the form, redirect to the
+   * print certificate form page, since the user should not be able to
+   * review/print the certificate if there are validation errors.
+   */
+  const validationErrorExist = validationErrorsInActionFormExist({
+    formConfig,
+    form: annotation,
+    context: validatorContext
+  })
+
+  if (validationErrorExist) {
+    // eslint-disable-next-line no-console
+    console.warn('Form is not properly filled. Redirecting to the beginning...')
+    return (
+      <Navigate
+        to={ROUTES.V2.EVENTS.PRINT_CERTIFICATE.buildPath(
+          { eventId },
+          { backTo }
+        )}
+      />
+    )
+  }
+
+  if (!svgCode) {
+    return <Spinner id="review-certificate-loading" />
+  }
+
+  const handleCorrection = () =>
+    navigate(
+      ROUTES.V2.EVENTS.REQUEST_CORRECTION.buildPath({ eventId }, { backTo })
+    )
+
+  const handlePrint = async () => {
+    const confirmed = await openModal<boolean>((close) => (
+      <Dialog
+        isOpen
+        actions={[
+          <Button
+            key="close-modal"
+            id="close-modal"
+            type="tertiary"
+            onClick={() => {
+              close(false)
+            }}
+          >
+            {intl.formatMessage(messages.cancel)}
+          </Button>,
+          <Button
+            key="print-certificate"
+            disabled={!isOnlineRef.current || isPending}
+            id="print-certificate"
+            type="primary"
+            onClick={() => close(true)}
+          >
+            {intl.formatMessage(messages.print)}
+          </Button>
+        ]}
+        id="confirm-print-modal"
+        title={intl.formatMessage(messages.printAndIssueModalTitle)}
+        onClose={() => close(false)}
+      >
+        {intl.formatMessage(messages.printAndIssueModalBody)}
+      </Dialog>
+    ))
+
+    /**
+     * NOTE: We have separated the preparing and printing of the PDF certificate. Without the separation, user is already unassigned from the event and cache is cleared. @see preparePdfCertificate for more details.
+     */
+    if (confirmed) {
+      try {
+        const printCertificate = await preparePdfCertificate({
+          ...fullEvent,
+          actions: actionsWithAnOptimisticPrintAction
+        })
+
+        await onlineActions.printCertificate.mutateAsync({
+          keepAssignment: true,
+          eventId: fullEvent.id,
+          fullEvent,
+          declaration: {},
+          annotation,
+          content: { templateId },
+          transactionId: uuid(),
+          type: ActionType.PRINT_CERTIFICATE
+        })
+
+        printCertificate()
+
+        await assignment.unassign.mutateAsync({
+          eventId,
+          transactionId: getUUID()
+        })
+
+        toast.custom(
+          <Toast
+            duration={null}
+            type={'success'}
+            onClose={() => toast.remove(`print-successful${eventId}`)}
+          >
+            {intl.formatMessage(messages.toastMessage)}
+          </Toast>,
+          {
+            id: `print-successful${eventId}`
+          }
+        )
+
+        if (backTo) {
+          navigate(backTo, { replace: true })
+        } else {
+          navigate(ROUTES.V2.EVENTS.EVENT.buildPath({ eventId }), {
+            replace: true
+          })
+        }
+      } catch (error) {
+        // TODO: add notification alert
+        // eslint-disable-next-line no-console
+        console.error(error)
+      }
+    }
+  }
+
+  // Display make correction button only if the user has permission to correct or request correction
+  const userMayCorrect =
+    isActionAllowed(ActionType.REQUEST_CORRECTION) ||
+    isActionAllowed(ActionType.APPROVE_CORRECTION)
+
+  const makeCorrectionButton = userMayCorrect ? (
+    <Button fullWidth size="large" type="negative" onClick={handleCorrection}>
+      <Icon name="X" size="medium" />
+      {intl.formatMessage(messages.makeCorrection)}
+    </Button>
+  ) : (
+    <></>
+  )
+
+  return (
+    <FormLayout
+      appbarIcon={<Print />}
+      route={ROUTES.V2.EVENTS.PRINT_CERTIFICATE}
+    >
+      <Frame.LayoutCentered>
+        <Stack direction="column">
+          <CertificatePreviewBox>
+            <CertificateContainer
+              dangerouslySetInnerHTML={{ __html: svgCode }}
+              id="print"
+            />
+          </CertificatePreviewBox>
+
+          {!isOnline && (
+            <ReactTooltip effect="solid" id="no-connection" place="top">
+              <TooltipMessage>
+                {intl.formatMessage(messages.onlineOnly)}
+              </TooltipMessage>
+            </ReactTooltip>
+          )}
+
+          <Content
+            showTitleOnMobile
+            bottomActionButtons={[
+              makeCorrectionButton,
+              <TooltipContainer
+                key="confirm-and-print"
+                data-tip
+                data-for="no-connection"
+              >
+                <Button
+                  fullWidth
+                  disabled={!isOnline || isPending}
+                  id="confirm-print"
+                  size="large"
+                  type="positive"
+                  onClick={handlePrint}
+                >
+                  <Icon name="Check" size="medium" />
+                  {intl.formatMessage(messages.confirmPrint)}
+                </Button>
+              </TooltipContainer>
+            ]}
+            bottomActionDirection="row"
+            title={intl.formatMessage(messages.printTitle)}
+          >
+            {modal}
+            {intl.formatMessage(messages.printDescription)}
+          </Content>
+        </Stack>
+      </Frame.LayoutCentered>
+    </FormLayout>
+  )
+}

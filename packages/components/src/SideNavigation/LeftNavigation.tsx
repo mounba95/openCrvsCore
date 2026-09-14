@@ -1,0 +1,163 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import * as React from 'react'
+import styled from 'styled-components'
+import { ConnectionStatus } from './ConnectionStatus'
+import { Icon } from '../Icon'
+
+export interface ILeftNavigationProps {
+  applicationName: string
+  children?: React.ReactNode
+  navigationWidth?: number
+  avatar?: () => React.ReactNode
+  name?: string | null
+  role?: string | null
+  assignedOffice?: string | null
+  warning?: JSX.Element | null
+  className?: string
+  applicationVersion: string
+  isOnline?: boolean
+}
+
+const LeftNavigationContainer = styled.div<{
+  navigationWidth?: number
+}>`
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  width: ${({ navigationWidth }) =>
+    navigationWidth ? navigationWidth : 282}px;
+  height: 100vh;
+  overflow-y: auto;
+  /* Niger : vert pâle repris d'INCI (capture fournie le 2026-08-18) au lieu
+     du blanc par défaut, comme le reste de l'application. */
+  /* stylelint-disable-next-line color-no-hex */
+  background-color: #c5e0b5;
+  border-right: 1px solid ${({ theme }) => theme.colors.grey300};
+  @media (max-width: ${({ theme }) => theme.grid.breakpoints.lg}px) {
+    ${({ navigationWidth }) => !navigationWidth && `display: none;`}
+  }
+`
+const UserInfo = styled.div`
+  background: ${({ theme }) => theme.colors.white};
+  padding: 32px 24px;
+  text-align: justify;
+  border: 0px;
+  border-bottom: 1px solid ${({ theme }) => theme.colors.grey300};
+  @media (min-width: ${({ theme }) => theme.grid.breakpoints.lg}px) {
+    display: none;
+  }
+`
+const UserName = styled.p`
+  ${({ theme }) => theme.fonts.h4};
+  margin: 25px 0px 5px;
+`
+const Role = styled.p`
+  ${({ theme }) => theme.fonts.reg12};
+  margin: 0px;
+`
+
+const ApplicationNameContainer = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  height: 56px;
+  background-color: ${({ theme }) => theme.colors.brandGreen};
+  border-bottom: 1px solid ${({ theme }) => theme.colors.grey300};
+  box-sizing: border-box;
+  @media (max-width: ${({ theme }) => theme.grid.breakpoints.lg}px) {
+    display: none;
+  }
+`
+// Niger : plus gras/grand pour bien ressortir (demande utilisateur du
+// 2026-08-18) — h3 au lieu de h4.
+const ApplicationName = styled.div`
+  ${({ theme }) => theme.fonts.h3};
+  color: ${({ theme }) => theme.colors.white};
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+`
+
+const VersionCard = styled.div`
+  color: ${({ theme }) => theme.colors.grey400};
+  height: auto;
+  padding: 16px;
+  background-color: ${({ theme }) => theme.colors.grey50};
+  margin: 16px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+`
+
+const VersionText = styled.span`
+  ${({ theme }) => theme.fonts.bold10};
+  text-transform: uppercase;
+`
+
+const Container = styled.div`
+  flex: 0 0 auto;
+`
+
+const MenuItem = styled.div`
+  flex: 1 1 auto;
+  overflow-y: auto;
+`
+
+const VersionCardName = styled.span`
+  ${({ theme }) => theme.fonts.bold12};
+  color: ${({ theme }) => theme.colors.grey600};
+  display: block;
+`
+const UserDescription = styled.span`
+  ${({ theme }) => theme.fonts.reg12};
+  color: ${({ theme }) => theme.colors.grey500};
+`
+
+export const LeftNavigation = (props: ILeftNavigationProps) => {
+  return (
+    <LeftNavigationContainer
+      navigationWidth={props.navigationWidth}
+      className={props.className}
+    >
+      <Container>
+        <ApplicationNameContainer>
+          <Icon color="white" name="Institution" size="large" />
+          <ApplicationName>{props.applicationName}</ApplicationName>
+        </ApplicationNameContainer>
+        <UserInfo>
+          <>
+            {props.avatar && (props.avatar(), null)}
+            <UserName>{props.name && props.name}</UserName>
+            <Role>{props.role && props.role}</Role>
+          </>
+        </UserInfo>
+      </Container>
+      <MenuItem>{props.children && props.children}</MenuItem>
+      <Container>
+        <VersionCard>
+          <div>
+            <VersionCardName>{props.name}</VersionCardName>
+            <UserDescription>
+              {[props.role, props.assignedOffice].filter(Boolean).join(' • ')}
+            </UserDescription>
+          </div>
+          <ConnectionStatus isOnline={props.isOnline} />
+          {props.warning}
+          <VersionText>OpenCRVS v{props.applicationVersion}</VersionText>
+        </VersionCard>
+      </Container>
+    </LeftNavigationContainer>
+  )
+}

@@ -1,0 +1,933 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import {
+  flattenDeep,
+  omitBy,
+  mergeWith,
+  isArray,
+  isObject,
+  get,
+  has,
+  isNil,
+  uniqBy,
+  cloneDeep,
+  orderBy,
+  isEqual,
+  isEmpty
+} from 'lodash'
+import {
+  ActionType,
+  DeclarationActionType,
+  DisplayableAction,
+  writeActions
+} from './ActionType'
+import { EventConfig } from './EventConfig'
+import { FieldConfig, FieldReference } from './FieldConfig'
+import {
+  Action,
+  ActionDocument,
+  ActionStatus,
+  ActionUpdate,
+  EventState
+} from './ActionDocument'
+import { PageConfig, PageTypes, VerificationPageConfig } from './PageConfig'
+import {
+  isConditionMet,
+  isFieldVisible,
+  ValidatorContext
+} from '../conditionals/validate'
+import { Draft } from './Draft'
+import { EventDocument } from './EventDocument'
+import { getUUID, UUID } from '../uuid'
+import {
+  ActionConfig,
+  actionConfigTypes,
+  ActionConfigTypes
+} from './ActionConfig'
+import { FormConfig } from './FormConfig'
+import { getOrThrow } from '../utils'
+import { TokenUserType } from '../authentication'
+import {
+  PlainDate,
+  plainDateToLocalDate,
+  SelectDateRangeValue
+} from './FieldValue'
+import { subDays, subYears, format } from 'date-fns'
+import { FieldType } from './FieldType'
+
+/* eslint-disable max-lines */
+
+export function ageToDate(age: number, asOfDate: PlainDate) {
+  const date = plainDateToLocalDate(asOfDate)
+  return PlainDate.parse(format(subYears(date, age), 'yyyy-MM-dd'))
+}
+
+export function getDeclarationFields(
+  configuration: EventConfig
+): FieldConfig[] {
+  return configuration.declaration.pages.flatMap(({ fields }) => fields)
+}
+
+export function getDeclarationPages(configuration: EventConfig) {
+  return configuration.declaration.pages
+}
+
+export function getDeclaration(configuration: EventConfig) {
+  return configuration.declaration
+}
+
+export function isActionConfigType(
+  type: ActionType
+): type is ActionConfigTypes {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return actionConfigTypes.has(type as any)
+}
+
+// @TODO: see if we can make this function generic so it returns a typed ActionConfig based on the given actionType (e.g. `Extract<ActionConfig, { type: T }>`),
+// instead of the current wide `ActionConfig | undefined`. Note NOTIFY's fallback to DECLARE needs special-casing in the return type, since it can resolve to a DeclareConfig.
+// Perhaps this function should also throw an error if the action config is not found.
+export function getActionConfig({
+  eventConfiguration,
+  actionType,
+  customActionType
+}: {
+  eventConfiguration: EventConfig
+  actionType: DisplayableAction
+  customActionType?: string
+}): ActionConfig | undefined {
+  // Notify uses its own config when present, otherwise falls back to declare
+  if (actionType === ActionType.NOTIFY) {
+    return (
+      eventConfiguration.actions.find((a) => a.type === ActionType.NOTIFY) ??
+      eventConfiguration.actions.find((a) => a.type === ActionType.DECLARE)
+    )
+  }
+
+  return eventConfiguration.actions.find((a) => {
+    // We can have multiple custom actions configured, we specify the custom action with 'customActionType'
+    if (a.type === ActionType.CUSTOM && customActionType) {
+      return a.customActionType === customActionType
+    }
+
+    return a.type === actionType
+  })
+}
+
+export function getCustomActionFields(
+  eventConfiguration: EventConfig,
+  customActionType: string
+): FieldConfig[] {
+  const actionConfig = getActionConfig({
+    eventConfiguration,
+    customActionType,
+    actionType: ActionType.CUSTOM
+  })
+
+  if (!actionConfig || actionConfig.type !== ActionType.CUSTOM) {
+    return []
+  }
+
+  return actionConfig.form
+}
+
+/**
+ * Returns the fields configured for an action's confirmation dialog.
+ *
+ * Unlike review fields and supporting copy, NOTIFY does NOT fall back to the
+ * DECLARE config here: dialog fields always come from the action's own
+ * configuration entry.
+ */
+export function getActionFormFields(
+  eventConfiguration: EventConfig,
+  actionType: ActionType,
+  customActionType?: string
+): FieldConfig[] {
+  const actionConfig = eventConfiguration.actions.find((a) => {
+    if (a.type === ActionType.CUSTOM && customActionType) {
+      return a.customActionType === customActionType
+    }
+
+    return a.type === actionType
+  })
+
+  if (!actionConfig || !('form' in actionConfig) || actionConfig.form == null) {
+    return []
+  }
+
+  return actionConfig.form
+}
+
+export function getPrintCertificatePages(configuration: EventConfig) {
+  const action = configuration.actions.find(
+    (a) => a.type === ActionType.PRINT_CERTIFICATE
+  )
+
+  return getOrThrow(
+    action?.printForm.pages,
+    `${ActionType.PRINT_CERTIFICATE} action does not have print form set.`
+  )
+}
+
+export const getActionAnnotationFields = (actionConfig: ActionConfig) => {
+  if (actionConfig.type === ActionType.REQUEST_CORRECTION) {
+    return actionConfig.correctionForm.pages.flatMap(({ fields }) => fields)
+  }
+
+  if (actionConfig.type === ActionType.PRINT_CERTIFICATE) {
+    return actionConfig.printForm.pages.flatMap(({ fields }) => fields)
+  }
+
+  const reviewFields =
+    'review' in actionConfig && actionConfig.review != null
+      ? actionConfig.review.fields
+      : []
+
+  const formFields =
+    'form' in actionConfig && actionConfig.form != null ? actionConfig.form : []
+
+  return [...reviewFields, ...formFields]
+}
+
+function getAllAnnotationFields(config: EventConfig): FieldConfig[] {
+  return flattenDeep(config.actions.map(getActionAnnotationFields))
+}
+
+export function getAllUniqueFields(eventConfig: EventConfig) {
+  return uniqBy(getDeclarationFields(eventConfig), (field) => field.id)
+}
+
+export function getDeclarationFieldById(
+  config: EventConfig,
+  fieldId: string
+): FieldConfig {
+  const field = getAllUniqueFields(config).find((f) => f.id === fieldId)
+
+  return getOrThrow(field, `Field with id ${fieldId} not found in event config`)
+}
+
+/**
+ * @TODO: Request correction should have same format as print certificate
+ */
+export const findRecordActionPages = (
+  config: EventConfig,
+  actionType: ActionType
+): PageConfig[] => {
+  const action = config.actions.find((a) => a.type === actionType)
+
+  if (action?.type === ActionType.REQUEST_CORRECTION) {
+    return action.correctionForm.pages
+  }
+
+  if (action?.type === ActionType.PRINT_CERTIFICATE) {
+    return action.printForm.pages
+  }
+
+  return []
+}
+
+export function getActionReview(
+  configuration: EventConfig,
+  actionType: ActionType
+) {
+  const actionConfig = getActionConfig({
+    eventConfiguration: configuration,
+    actionType
+  })
+
+  if (!actionConfig) {
+    throw 'Tried to get action review for an action that is not a declaration action'
+  }
+
+  if ('review' in actionConfig) {
+    return actionConfig.review
+  }
+
+  return undefined
+}
+
+export function getActionReviewFields(
+  configuration: EventConfig,
+  actionType: DeclarationActionType
+) {
+  const review = getActionReview(configuration, actionType)
+  if (!review) {
+    return []
+  }
+  return review.fields
+}
+
+export function isPageVisible(
+  page: PageConfig,
+  formValues: ActionUpdate,
+  context: ValidatorContext
+) {
+  if (!page.conditional) {
+    return true
+  }
+
+  return isConditionMet(page.conditional, formValues, context)
+}
+
+/**
+ * Removes values from the form that correspond to hidden fields.
+ * This function recursively omits any fields from the form values that are not visible
+ * according to their FieldConfig and the current form state. It ensures that only values
+ * for visible fields are retained, which is useful for conditional forms where hidden field
+ * values should not affect validation or submission.
+ *
+ * @template T - The type of the form values
+ * @param {T} formValues - The current form values
+ * @param {FieldConfig[]} fields - The list of field configurations to check visibility against
+ * * @param validatorContext - custom validation context
+ * @returns {Partial<T>} A new object containing only the values for visible fields
+ */
+export function omitHiddenFields<T extends EventState | ActionUpdate>(
+  fields: FieldConfig[],
+  formValues: T,
+  validatorContext: ValidatorContext,
+  includeHiddenFieldsWithNullValues: boolean = false
+): Partial<T> {
+  const base = cloneDeep(formValues)
+
+  // The omitting is done recursively until the object does not change.
+  // This is because the previously removed fields might affect the visibility of other fields.
+  function fn(prevVisibilityContext: Partial<T>): Partial<T> {
+    const cleaned = omitBy<Partial<T>>(base, (value, fieldId) => {
+      const fieldConfig = fields.filter((f) => f.id === fieldId)
+
+      if (!fieldConfig.length) {
+        return false
+      }
+
+      const isHidden = fieldConfig.every(
+        (f) => !isFieldVisible(f, prevVisibilityContext, validatorContext)
+      )
+
+      if (!isHidden) {
+        return false
+      }
+
+      if (includeHiddenFieldsWithNullValues && value === null) {
+        return false
+      }
+
+      return true
+    })
+
+    return isEqual(cleaned, prevVisibilityContext) ? cleaned : fn(cleaned)
+  }
+
+  return fn(base)
+}
+
+export function omitHiddenPaginatedFields<T extends EventState | ActionUpdate>(
+  formConfig: FormConfig,
+  values: T,
+  validatorContext: ValidatorContext,
+  includeHiddenFieldsWithNullValues: boolean = false
+) {
+  const visibleFields = formConfig.pages
+    .filter((p) => isPageVisible(p, values, validatorContext))
+    .flatMap((p) => p.fields)
+
+  const hiddenFields = formConfig.pages
+    .filter((p) => !isPageVisible(p, values, validatorContext))
+    .flatMap((p) => p.fields)
+
+  const valuesExceptHiddenPage = omitBy(values, (_, fieldId) => {
+    return (
+      hiddenFields.some((f) => f.id === fieldId) &&
+      !visibleFields.some((f) => f.id === fieldId)
+    )
+  })
+
+  return omitHiddenFields(
+    visibleFields,
+    valuesExceptHiddenPage,
+    validatorContext,
+    includeHiddenFieldsWithNullValues
+  )
+}
+
+/**
+ *
+ * @returns a draft for the event that has been created since the last non-read action.
+ */
+export function findActiveDraftForEvent(
+  event: EventDocument,
+  draft: Draft
+): Draft | undefined {
+  const actions = orderBy(
+    event.actions.filter(({ type }) => type !== ActionType.READ),
+    ['createdAt'],
+    ['asc']
+  )
+
+  const lastAction = actions[actions.length - 1]
+  // After migrations have been run, there should always be [0..1[ actions.
+  // Temporally allows equal timestamps as the generated demo data is not perfect yet
+  const isDraftActive = draft.createdAt >= lastAction.createdAt
+
+  const isDraftForEvent = event.id === draft.eventId
+
+  return isDraftActive && isDraftForEvent ? draft : undefined
+}
+
+export function createEmptyDraft(
+  eventId: UUID,
+  draftId: UUID,
+  actionType: Exclude<ActionType, 'DELETE'>
+): Draft {
+  return {
+    id: draftId,
+    eventId,
+    createdAt: new Date().toISOString(),
+    transactionId: getUUID(),
+    action: {
+      type: actionType,
+      declaration: {},
+      annotation: {},
+      createdAt: new Date().toISOString(),
+      createdByUserType: TokenUserType.enum.user,
+      createdBy: '@todo',
+      status: ActionStatus.Accepted,
+      transactionId: '@todo',
+      createdByRole: '@todo'
+    }
+  }
+}
+
+export function isVerificationPage(
+  page: PageConfig
+): page is VerificationPageConfig {
+  return page.type === PageTypes.enum.VERIFICATION
+}
+
+export function getVisibleVerificationPageIds(
+  pages: PageConfig[],
+  annotation: ActionUpdate,
+  context: ValidatorContext
+): string[] {
+  return pages
+    .filter((page) => isVerificationPage(page))
+    .filter((page) => isPageVisible(page, annotation, context))
+    .map((page) => page.id)
+}
+
+export function omitHiddenAnnotationFields(
+  actionConfig: ActionConfig,
+  declaration: EventState,
+  annotation: ActionUpdate,
+  context: ValidatorContext
+) {
+  const annotationFields = getActionAnnotationFields(actionConfig)
+
+  return omitHiddenFields(annotationFields, annotation, {
+    ...context,
+    baseFormState: declaration
+  })
+}
+
+/**
+ * Merges two documents together.
+ *
+ * @example deepMerge({'review.signature': { path: '/path.png', type: 'image/png' }}, { foo: 'bar'}) } => { 'review.signature': { path: '/path.png', type: 'image/png' }, foo: 'bar' }
+ *
+ * NOTE: When merging deep objects, the values from the second object will override the first one.
+ * @example { annotation: {'review.signature': { path: '/path.png', type: 'image/png' }}, { annotation: { foo: 'bar'}) } } => { annotation: { foo: 'bar' } }
+ */
+export function deepMerge<
+  T extends Record<string, unknown>,
+  K extends Record<string, unknown>
+>(currentDocument: T, actionDocument: K): T & K {
+  /**
+   * Cloning is essential since mergeWith mutates the first argument.
+   */
+  const currentDocumentClone = cloneDeep(currentDocument)
+  return mergeWith(
+    cloneDeep(currentDocumentClone),
+    actionDocument,
+    (previousValue, incomingValue) => {
+      if (incomingValue === undefined) {
+        return previousValue
+      }
+      if (isArray(incomingValue)) {
+        return incomingValue // Replace arrays instead of merging
+      }
+      if (isObject(previousValue) && isObject(incomingValue)) {
+        return undefined // Continue deep merging objects
+      }
+
+      return incomingValue // Override with latest value
+    }
+  )
+}
+
+export function findLastAssignmentAction(actions: Action[]) {
+  return actions
+    .filter(
+      ({ type }) => type === ActionType.ASSIGN || type === ActionType.UNASSIGN
+    )
+    .reduce<
+      Action | undefined
+    >((latestAction, action) => (!latestAction || action.createdAt > latestAction.createdAt ? action : latestAction), undefined)
+}
+
+/**
+ * Tell compiler that accessing record with arbitrary key might result to undefined
+ * Use when you **cannot guarantee**  that key exists in the record
+ */
+export type IndexMap<T> = {
+  [id: string]: T | undefined
+}
+
+/**
+ * Recursive union type that mirrors the shape of a form configuration.
+ *
+ * A `FormState<T>` is either:
+ * - A leaf value of type `T` (e.g. a field's current value, error message, or
+ *   touched flag), or
+ * - A nested object whose values are themselves `FormState<T>`, representing a
+ *   `FIELD_GROUP` whose children each carry their own state.
+ *
+ * This makes it possible to represent form field values as well as metadata
+ * (errors, touched state, etc.) in a single recursive structure that naturally
+ * matches the nesting of the form configuration.
+ */
+export type FormState<T> =
+  | T
+  | {
+      [id: string]: FormState<T> | undefined
+    }
+
+/**
+ * Construct a `FormState` map from a list of `FieldConfig` items by applying a
+ * mapper function to every leaf field.
+ *
+ * `FIELD_GROUP` fields are handled recursively: instead of calling `mapper` on
+ * the group itself, `buildFormState` descends into the group's `fields` and
+ * stores the resulting nested state under the group's id.
+ *
+ * Leaf fields for which `mapper` returns `undefined` are omitted from the
+ * result entirely.
+ *
+ * @param fields - Flat or nested list (using FIELD_GROUP) of field configurations
+ *   to process.
+ * @param mapper - Called for every non-group field. Return a value to include
+ *   that field in the state, or `undefined` to omit it.
+ * @returns A nested state map whose structure mirrors the field hierarchy.
+ *
+ * @example
+ * const fields = [
+ *   { id: 'firstName', type: 'TEXT' },
+ *   {
+ *     id: 'address',
+ *     type: 'FIELD_GROUP',
+ *     fields: [
+ *       { id: 'street', type: 'TEXT'},
+ *       { id: 'city', type: 'TEXT'}
+ *     ]
+ *   }
+ * ]
+ * // Mark every field as untouched (false)
+ * const touched = buildFormState(fields, () => false)
+ * // { firstName: false, address: { street: false, city: false } }
+ */
+export function buildFormState<T>(
+  fields: FieldConfig[],
+  mapper: (field: FieldConfig) => T | undefined
+): IndexMap<FormState<T>> {
+  return fields.reduce(
+    (acc, field) => {
+      if (field.type === FieldType.FIELD_GROUP) {
+        const nestedState = buildFormState(field.fields, mapper)
+        if (isEmpty(nestedState)) {
+          return acc
+        }
+        acc[field.id] = nestedState
+        return acc
+      }
+      const mappedValue = mapper(field)
+      if (mappedValue !== undefined) {
+        acc[field.id] = mappedValue
+      }
+      return acc
+    },
+    {} as IndexMap<FormState<T>>
+  )
+}
+
+/**
+ * Transform every leaf value in a `FormState` via a mapping function,
+ * preserving the nested structure.
+ *
+ * `undefined` entries are dropped from the result. Objects
+ * are treated as nested groups and traversed recursively
+ * Leaf values are passed to `fn`.
+ *
+ * @param state - The source state to transform.
+ * @param fn - Transformer applied to each leaf value.
+ * @returns A new state with the same shape but with leaf values replaced by the
+ *   return value of `fn`.
+ *
+ * @example
+ * // Convert an error state from string[] to boolean (has-error flag)
+ * const hasErrors = mapFormState(formErrors, (msgs) => msgs.length > 0)
+ */
+export function mapFormState<T, R>(
+  state: IndexMap<FormState<T>>,
+  fn: (leafState: T) => R
+): IndexMap<FormState<R>> {
+  return Object.entries(state).reduce(
+    (mappedState, [key, value]) => {
+      if (value === undefined) {
+        return mappedState
+      }
+      if (typeof value === 'object' && !Array.isArray(value) && value) {
+        mappedState[key] = mapFormState(value as IndexMap<FormState<T>>, fn)
+        return mappedState
+      }
+      mappedState[key] = fn(value)
+      return mappedState
+    },
+    {} as IndexMap<FormState<R>>
+  )
+}
+
+/**
+ * Flatten a nested `FormState` into an array of `[path, value]` pairs, where
+ * `path` is the sequence of keys that leads to the leaf value.
+ *
+ * Empty arrays are treated as "no value" and are omitted from the output.
+ *
+ * @param state - The state to flatten.
+ * @param path - Internal accumulator for the current key path. Callers should
+ *   omit this parameter (defaults to `[]`).
+ * @returns An array of `[string[], T]` tuples — one entry per leaf value.
+ *
+ * @example
+ * const errors = { firstName: ['Required'], address: { city: ['Required'] } }
+ * flattenFormState(errors)
+ * // => [ [['firstName'], ['Required']], [['address', 'city'], ['Required']] ]
+ */
+export function flattenFormState<T>(
+  state: FormState<T>,
+  path: string[] = []
+): Array<[string[], T]> {
+  if (typeof state === 'object' && !Array.isArray(state) && state) {
+    return Object.entries(state)
+      .filter((e): e is [string, FormState<T>] => e[1] !== undefined)
+      .flatMap((e) => flattenFormState(e[1], [...path, e[0]]))
+  }
+  if (Array.isArray(state) && state.length === 0) {
+    return []
+  }
+  return [[path, state]]
+}
+
+export function flattenFieldReference(ref: FieldReference) {
+  return [ref.$$field, ...ref.$$subfield]
+}
+
+export function isWriteAction(actionType: ActionType): boolean {
+  return writeActions.safeParse(actionType).success
+}
+
+/**
+ * @returns All the fields in the event configuration.
+ */
+export const findAllFields = (config: EventConfig): FieldConfig[] => {
+  return flattenDeep([
+    ...getDeclarationFields(config),
+    ...getAllAnnotationFields(config)
+  ])
+}
+
+/**
+ * Returns the value of the object at the given path with the ability of resolving mixed paths. See examples.
+ *
+ * @param obj Entity we want to get the value from
+ * @param path property path e.g. `a.b.c`
+ * @param defaultValue
+ * @returns the value of the object at the given path.
+ */
+export function getMixedPath<T = unknown>(
+  obj: Record<string, unknown>,
+  path: string,
+  defaultValue?: T | undefined
+): T | undefined {
+  const parts = path.split('.')
+
+  // We don't know the type of the object at the path is.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const resolve = (current: unknown, segments: string[]): any => {
+    if (current == null || segments.length === 0) {
+      return current
+    }
+
+    // Try all compound segment combinations from longest to shortest
+    for (let i = segments.length; i > 0; i--) {
+      const compoundKey = segments.slice(0, i).join('.')
+
+      if (has(current, compoundKey)) {
+        const next = get(current, compoundKey)
+        return resolve(next, segments.slice(i))
+      }
+    }
+
+    return undefined
+  }
+
+  const result = resolve(obj, parts)
+  return isNil(result) ? defaultValue : result
+}
+
+export function getEventConfigById(eventConfigs: EventConfig[], id: string) {
+  const eventConfig = eventConfigs.find(
+    (eventConfiguration) => eventConfiguration.id === id
+  )
+  return getOrThrow(eventConfig, `Event config for ${id} not found`)
+}
+
+export function timePeriodToDateRange(value: SelectDateRangeValue) {
+  let startDate: Date
+  switch (value) {
+    case 'last7Days':
+      startDate = subDays(new Date(), 7)
+      break
+    case 'last30Days':
+      startDate = subDays(new Date(), 30)
+      break
+    case 'last90Days':
+      startDate = subDays(new Date(), 90)
+      break
+    case 'last365Days':
+      startDate = subDays(new Date(), 365)
+      break
+  }
+  return {
+    startDate: startDate.toISOString(),
+    endDate: new Date().toISOString()
+  }
+}
+
+export function mergeDrafts(currentDraft: Draft, incomingDraft: Draft): Draft {
+  if (currentDraft.eventId !== incomingDraft.eventId) {
+    throw new Error(
+      `Cannot merge drafts for different events: ${currentDraft.eventId} and ${incomingDraft.eventId}`
+    )
+  }
+
+  return {
+    ...currentDraft,
+    ...incomingDraft,
+    action: {
+      ...currentDraft.action,
+      ...incomingDraft.action,
+      declaration: deepMerge(
+        currentDraft.action.declaration,
+        incomingDraft.action.declaration
+      ),
+      annotation: deepMerge(
+        currentDraft.action.annotation ?? {},
+        incomingDraft.action.annotation ?? {}
+      )
+    }
+  }
+}
+
+function isRequestedAction(a: Action): a is ActionDocument {
+  return a.status === ActionStatus.Requested
+}
+function isAcceptedAction(a: Action): a is ActionDocument {
+  return a.status === ActionStatus.Accepted
+}
+function isRejectedAction(a: Action): a is ActionDocument {
+  return a.status === ActionStatus.Rejected
+}
+
+export function getPendingAction(actions: Action[]): ActionDocument {
+  const requestedActions = actions.filter(isRequestedAction)
+  const pendingActions = requestedActions.filter(
+    ({ id }) =>
+      !actions.some(
+        (action) =>
+          (isAcceptedAction(action) || isRejectedAction(action)) &&
+          action.originalActionId === id
+      )
+  )
+
+  if (pendingActions.length !== 1) {
+    throw new Error(
+      `Expected exactly one pending action, but found ${pendingActions.map(({ id }) => id).join(', ')}`
+    )
+  }
+
+  return pendingActions[0]
+}
+
+export function getCompleteActionAnnotation(
+  event: EventDocument,
+  action: ActionDocument
+): ActionUpdate {
+  /*
+   * When an action has an `originalActionId`, it means this action is linked
+   * to another one (the "original" action).
+   *
+   * - The original action, with status `Requested`, was created by core.
+   * - The linked action (with status `Accepted`) comes from
+   *   the country configuration in response to that request.
+   *
+   * If we find a `Requested` original action, we merge its annotation with
+   * the current action's annotation so that the current action includes the
+   * original details. Otherwise we return the action's own annotation as-is.
+   */
+  if (action.originalActionId) {
+    const originalAction = event.actions.find(
+      ({ id }) => id === action.originalActionId
+    )
+    if (originalAction?.status === ActionStatus.Requested) {
+      return deepMerge(originalAction.annotation ?? {}, action.annotation ?? {})
+    }
+  }
+  return action.annotation ?? {}
+}
+
+/**
+ * Resolves the complete content for an action, inheriting from its original
+ * Requested action when the Accepted action carries no content of its own.
+ *
+ * Mirrors the same "originalActionId → merge from Requested" pattern used by
+ * getCompleteActionAnnotation and getCompleteActionDeclaration.
+ */
+export function getCompleteActionContent(
+  event: EventDocument,
+  action: ActionDocument
+): Record<string, unknown> | null | undefined {
+  const currentContent = ('content' in action ? action.content : undefined) as
+    | Record<string, unknown>
+    | null
+    | undefined
+
+  if (!action.originalActionId) {
+    return currentContent
+  }
+
+  const originalAction = event.actions.find(
+    ({ id }) => id === action.originalActionId
+  )
+
+  if (originalAction && 'content' in originalAction && originalAction.content) {
+    return {
+      ...(originalAction.content as Record<string, unknown>),
+      ...(currentContent ?? {})
+    }
+  }
+
+  return currentContent
+}
+
+export function getCompleteActionDeclaration<
+  T extends EventState | ActionUpdate
+>(declaration: T, event: EventDocument, action: ActionDocument): T {
+  /*
+   * When an action has an `originalActionId`, it means this action is linked
+   * to another one (the "original" action).
+   *
+   * - The original action, with status `Requested`, was created by core.
+   * - The linked action (with status `Accepted`) comes from
+   *   the country configuration in response to that request.
+   *
+   * If we find the original action, we merge its declaration into the current one
+   * so that the current action includes the original details.
+   */
+  if (action.originalActionId) {
+    const originalAction = event.actions.find(
+      ({ id }) => id === action.originalActionId
+    )
+
+    // Requested actions may carry partial declaration data.
+    // Merge original declaration with the current one to preserve completeness.
+    if (originalAction?.status === ActionStatus.Requested) {
+      return deepMerge(
+        deepMerge(declaration, originalAction.declaration),
+        action.declaration
+      )
+    }
+  }
+  return deepMerge(declaration, action.declaration)
+}
+
+export function getAcceptedActions(event: EventDocument): ActionDocument[] {
+  return event.actions.filter(isAcceptedAction).map((action) => ({
+    ...action,
+    declaration: getCompleteActionDeclaration({}, event, action),
+    annotation: getCompleteActionAnnotation(event, action)
+  }))
+}
+
+// Action types that are not taken into the aggregate values
+const EXCLUDED_ACTIONS = [
+  ActionType.REQUEST_CORRECTION,
+  ActionType.PRINT_CERTIFICATE,
+  ActionType.REJECT_CORRECTION
+]
+
+export function aggregateActionDeclarations(event: EventDocument): EventState {
+  const allAcceptedActions = getAcceptedActions(event)
+  const aggregatedActions = allAcceptedActions
+    .filter((a) => !EXCLUDED_ACTIONS.some((type) => type === a.type))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+
+  return aggregatedActions.reduce((declaration, action) => {
+    /*
+     * If the action encountered is "APPROVE_CORRECTION", we want to apply the changed
+     * details in the correction. To do this, we find the original request that this
+     * approval is for and merge its details with the current data of the record.
+     */
+    if (action.type === ActionType.APPROVE_CORRECTION) {
+      const requestAction = allAcceptedActions.find(
+        ({ id }) => id === action.requestId
+      )
+
+      if (!requestAction) {
+        return declaration
+      }
+
+      const declarationWithApprovedCorrection = getCompleteActionDeclaration(
+        declaration,
+        event,
+        requestAction
+      )
+
+      // Apply async confirmation payload after the approved request so external
+      // integrations can finalize fields (e.g. child.nid) at approve time.
+      return getCompleteActionDeclaration(
+        declarationWithApprovedCorrection,
+        event,
+        action
+      )
+    }
+
+    return getCompleteActionDeclaration(declaration, event, action)
+  }, {})
+}
+
+export function aggregateActionAnnotations(event: EventDocument): EventState {
+  return event.actions.reduce((ann, sortedAction) => {
+    if (!('annotation' in sortedAction) || !sortedAction.annotation) {
+      return ann
+    }
+
+    return deepMerge(ann, sortedAction.annotation)
+  }, {} as EventState)
+}

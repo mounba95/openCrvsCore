@@ -1,0 +1,342 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import * as React from 'react'
+import { defineMessages, useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
+import {
+  useTypedParams,
+  useTypedSearchParams
+} from 'react-router-typesafe-routes/dom'
+import {
+  FieldConfig,
+  generateTransactionId,
+  getDeclarationFields,
+  isFieldVisible,
+  getCurrentEventState,
+  ActionType
+} from '@opencrvs/commons/client'
+import {
+  Button,
+  Content,
+  Dialog,
+  Text,
+  AppBar,
+  Frame,
+  Icon
+} from '@opencrvs/components'
+import { Check } from '@opencrvs/components/lib/icons'
+import { messages as registerMessages } from '@client/i18n/messages/views/register'
+import { messages as correctionMessages } from '@client/i18n/messages/views/correction'
+import { constantsMessages } from '@client/i18n/messages'
+import { useEventConfiguration } from '@client/v2-events/features/events/useEventConfiguration'
+import { useEventFormData } from '@client/v2-events/features/events/useEventFormData'
+import { useEventFormNavigation } from '@client/v2-events/features/events/useEventFormNavigation'
+import { useEvents } from '@client/v2-events/features/events/useEvents/useEvents'
+import { ROUTES } from '@client/v2-events/routes'
+import { useActionAnnotation } from '@client/v2-events/features/events/useActionAnnotation'
+import { useUserAllowedActions } from '@client/v2-events/features/workqueues/Actions/useUserAllowedActions'
+import { useValidatorContext } from '@client/v2-events/hooks/useValidatorContext'
+import { getChangedDeclarationDiff } from '@client/v2-events/features/events/useEvents/procedures/actions/declarationDiff'
+import { CorrectionDetails } from './CorrectionDetails'
+
+const messages = defineMessages({
+  submitCorrectionRequest: {
+    id: 'buttons.submitCorrectionRequest',
+    defaultMessage: 'Submit correction request',
+    description: 'Submit correction request button text'
+  },
+  makeCorrection: {
+    id: 'buttons.correctRecord',
+    defaultMessage: 'Correct record',
+    description: 'Record corrected button text'
+  }
+})
+
+/**
+ * Used for ensuring that the object has all the properties. For example, intl expects object with well defined properties for translations.
+ * For setting default fields for form values @see setFormValueToOutputFormat
+ *
+ * @returns object based on the fields given with null values.
+ */
+function setEmptyValuesForFields(fields: FieldConfig[]) {
+  return fields.reduce((initialValues: Record<string, null>, field) => {
+    return {
+      ...initialValues,
+      [field.id]: null
+    }
+  }, {})
+}
+
+export function Summary() {
+  const { eventId } = useTypedParams(
+    ROUTES.V2.EVENTS.REQUEST_CORRECTION.SUMMARY
+  )
+  const [{ backTo }] = useTypedSearchParams(
+    ROUTES.V2.EVENTS.REQUEST_CORRECTION.SUMMARY
+  )
+
+  const [showPrompt, setShowPrompt] = React.useState(false)
+  // Niger : sans garde, un double-clic sur "Confirmer" (aucun indicateur de
+  // chargement n'informait l'utilisateur que la première demande était déjà
+  // partie) envoyait deux demandes de correction quasi simultanées — la
+  // première posait le verrou (flag `request_correction:requested`), la
+  // seconde se faisait aussitôt rejeter (409) en le trouvant déjà là. Ce
+  // rejet silencieux (aucun scope ni erreur 409 "standard" avec `lockedBy`)
+  // laissait croire que la correction entière avait échoué, alors que la
+  // première demande restait open jusqu'à approbation.
+  const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const eventFormNavigation = useEventFormNavigation()
+  const navigate = useNavigate()
+  const intl = useIntl()
+
+  const events = useEvents()
+  const event = events.getEvent.getFromCache(eventId)
+  const validatorContext = useValidatorContext(event)
+  const { eventConfiguration } = useEventConfiguration(event.type)
+  const eventIndex = getCurrentEventState(event, eventConfiguration)
+  const togglePrompt = () => setShowPrompt(!showPrompt)
+
+  const previousFormValues = eventIndex.declaration
+  const getFormValues = useEventFormData((state) => state.getFormValues)
+
+  const form = getFormValues()
+  const fields = getDeclarationFields(eventConfiguration)
+  const { getAnnotation } = useActionAnnotation()
+  const annotation = getAnnotation()
+
+  const { isActionAllowed } = useUserAllowedActions(eventIndex)
+  const userMayCorrect = isActionAllowed(ActionType.APPROVE_CORRECTION)
+
+  const submitCorrection = React.useCallback(() => {
+    // Niger : voir la note sur `isSubmitting` plus haut — bloque tout appel
+    // répété (double-clic) tant que la première demande n'a pas fini de
+    // partir.
+    if (isSubmitting) {
+      return
+    }
+    setIsSubmitting(true)
+
+    const formWithOnlyChangedValues = getChangedDeclarationDiff(
+      fields,
+      form,
+      previousFormValues,
+      eventConfiguration,
+      validatorContext
+    )
+
+    const valuesThatGotHidden = fields.filter((field) => {
+      const wasVisible = isFieldVisible(
+        field,
+        previousFormValues,
+        validatorContext
+      )
+      const isHidden = !isFieldVisible(field, form, validatorContext)
+      return wasVisible && isHidden
+    })
+
+    const nullifiedHiddenValues = setEmptyValuesForFields(valuesThatGotHidden)
+
+    const uncorrectableFieldIds = getDeclarationFields(eventConfiguration)
+      .filter((f) => f.uncorrectable)
+      .map((f) => f.id)
+
+    const mutationPayload = {
+      eventId,
+      declaration: Object.fromEntries(
+        Object.entries({
+          ...formWithOnlyChangedValues,
+          ...nullifiedHiddenValues
+        }).filter(([key]) => !uncorrectableFieldIds.includes(key))
+      ),
+      transactionId: generateTransactionId(),
+      annotation,
+      event,
+      context: validatorContext,
+      fullEvent: event
+    }
+
+    if (userMayCorrect) {
+      events.customActions.makeCorrectionOnRequest.mutate(mutationPayload)
+    } else {
+      events.actions.correction.request.mutate(mutationPayload)
+    }
+
+    // Niger : après une correction, on va toujours directement sur la fiche
+    // de l'acte (pas sur la liste d'où l'utilisateur venait) — c'est là
+    // qu'on vérifie que la correction a bien été appliquée.
+    navigate(ROUTES.V2.EVENTS.EVENT.buildPath({ eventId }))
+  }, [
+    form,
+    fields,
+    event,
+    events.customActions.makeCorrectionOnRequest,
+    events.actions.correction.request,
+    eventId,
+    annotation,
+    previousFormValues,
+    navigate,
+    userMayCorrect,
+    validatorContext,
+    eventConfiguration,
+    isSubmitting
+  ])
+
+  const title = intl.formatMessage(correctionMessages.title)
+
+  return (
+    <>
+      <Frame
+        header={
+          <AppBar
+            desktopLeft={
+              <Button
+                aria-label="Go back"
+                size="medium"
+                type="icon"
+                onClick={() => navigate(-1)}
+              >
+                <Icon name="ArrowLeft" />
+              </Button>
+            }
+            desktopRight={
+              <Button
+                size="medium"
+                type="icon"
+                onClick={() => eventFormNavigation.closeActionView(backTo)}
+              >
+                <Icon color="primary" name="X" />
+              </Button>
+            }
+            desktopTitle={title}
+            mobileLeft={
+              <Button
+                aria-label="Go back"
+                size="medium"
+                type="icon"
+                onClick={() => navigate(-1)}
+              >
+                <Icon name="ArrowLeft" />
+              </Button>
+            }
+            mobileRight={
+              <Button
+                size="medium"
+                type="icon"
+                onClick={() => eventFormNavigation.closeActionView(backTo)}
+              >
+                <Icon color="primary" name="X" />
+              </Button>
+            }
+            mobileTitle={title}
+          />
+        }
+        id="corrector_form"
+        skipToContentText={intl.formatMessage(
+          constantsMessages.skipToMainContent
+        )}
+      >
+        <Content
+          bottomActionButtons={[
+            <Button
+              key="make-correction"
+              fullWidth
+              id="make-correction"
+              size="large"
+              type="primary"
+              onClick={togglePrompt}
+            >
+              <Check />
+              {userMayCorrect
+                ? intl.formatMessage(messages.makeCorrection)
+                : intl.formatMessage(messages.submitCorrectionRequest)}
+            </Button>
+          ]}
+          showTitleOnMobile={true}
+          title={intl.formatMessage(correctionMessages.correctionSummaryTitle)}
+          topActionButtons={[
+            <Button
+              key="go-to-review"
+              id="go-to-review"
+              type="secondary"
+              onClick={() =>
+                navigate(
+                  ROUTES.V2.EVENTS.REQUEST_CORRECTION.REVIEW.buildPath(
+                    {
+                      eventId
+                    },
+                    { backTo }
+                  )
+                )
+              }
+            >
+              {intl.formatMessage(registerMessages.goToReviewButton)}
+            </Button>
+          ]}
+        >
+          <CorrectionDetails
+            annotation={annotation}
+            backTo={backTo}
+            editable={true}
+            event={event}
+            form={form}
+            requesting={!userMayCorrect}
+            validatorContext={validatorContext}
+          />
+        </Content>
+      </Frame>
+      <Dialog
+        actions={[
+          <Button
+            key="cancel"
+            id="cancel"
+            size="medium"
+            type="tertiary"
+            onClick={togglePrompt}
+          >
+            {intl.formatMessage(
+              correctionMessages.correctionForApprovalDialogCancel
+            )}
+          </Button>,
+          <Button
+            key="continue"
+            disabled={isSubmitting}
+            id="send"
+            loading={isSubmitting}
+            size="medium"
+            type="primary"
+            onClick={submitCorrection}
+          >
+            {intl.formatMessage(
+              correctionMessages.correctionForApprovalDialogConfirm
+            )}
+          </Button>
+        ]}
+        id="without-correction-for-approval-prompt"
+        isOpen={showPrompt}
+        title={intl.formatMessage(
+          userMayCorrect
+            ? correctionMessages.correctRecordDialogTitle
+            : correctionMessages.correctionApprovalDialogTitle
+        )}
+        onClose={togglePrompt}
+      >
+        <Text element="p" variant="reg16">
+          {intl.formatMessage(
+            userMayCorrect
+              ? correctionMessages.correctRecordDialogDescription
+              : correctionMessages.correctionForApprovalDialogDescription
+          )}
+        </Text>
+      </Dialog>
+    </>
+  )
+}

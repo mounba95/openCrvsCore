@@ -1,0 +1,1150 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+/* eslint-disable max-lines */
+
+import { UUID } from '../uuid'
+import { cloneDeep, difference } from 'lodash'
+import { Action, ActionDocument, ActionStatus } from './ActionDocument'
+import { EventDocument } from './EventDocument'
+import { EventConfig } from './EventConfig'
+import { ActionType } from './ActionType'
+import {
+  findLastAssignmentAction,
+  getActionAnnotationFields,
+  getActionConfig,
+  getActionFormFields,
+  getCompleteActionAnnotation,
+  getCompleteActionContent,
+  getDeclaration,
+  getDeclarationFields,
+  getMixedPath,
+  getPendingAction,
+  omitHiddenPaginatedFields
+} from './utils'
+import { TokenUserType } from '../authentication'
+import {
+  createPrng,
+  field,
+  FieldType,
+  fieldConfigsToActionPayload,
+  tennisClubMembershipEvent
+} from '../client'
+import { generateActionDocument, generateTranslationConfig } from './test.utils'
+import { DeclarationFormConfig } from './FormConfig'
+
+const commonAction = {
+  status: 'Requested' as const,
+  id: 'action-id-1' as UUID,
+  declaration: {},
+  createdBy: 'user-id-1',
+  createdByRole: 'user-role-1',
+  createdAtLocation: 'location-id-1' as UUID,
+  transactionId: 'transaction-id-1'
+}
+
+const testCases: { actions: Action[]; expected: Action | undefined }[] = [
+  {
+    actions: [],
+    expected: undefined
+  },
+  {
+    actions: [
+      {
+        ...commonAction,
+        type: ActionType.CREATE,
+        createdByUserType: TokenUserType.enum.user,
+        createdAt: '2023-01-01T00:00:00Z'
+      }
+    ],
+    expected: undefined
+  },
+  {
+    actions: [
+      {
+        ...commonAction,
+        type: ActionType.CREATE,
+        createdByUserType: TokenUserType.enum.user,
+        createdAt: '2023-01-01T00:00:00Z'
+      },
+      {
+        ...commonAction,
+        type: ActionType.ASSIGN,
+        createdByUserType: TokenUserType.enum.user,
+        createdAt: '2023-01-01T01:00:00Z',
+        assignedTo: 'user-id-2'
+      }
+    ],
+    expected: {
+      ...commonAction,
+      type: ActionType.ASSIGN,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-01-01T01:00:00Z',
+      assignedTo: 'user-id-2'
+    }
+  },
+  {
+    actions: [
+      {
+        ...commonAction,
+        type: ActionType.CREATE,
+        createdByUserType: TokenUserType.enum.user,
+        createdAt: '2023-01-01T00:00:00Z'
+      },
+      {
+        ...commonAction,
+        type: ActionType.ASSIGN,
+        createdByUserType: TokenUserType.enum.user,
+        createdAt: '2023-01-01T01:00:00Z',
+        assignedTo: 'user-id-2'
+      },
+      {
+        ...commonAction,
+        type: ActionType.UNASSIGN,
+        createdByUserType: TokenUserType.enum.user,
+        createdAt: '2023-01-01T02:00:00Z'
+      }
+    ],
+    expected: {
+      ...commonAction,
+      type: ActionType.UNASSIGN,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-01-01T02:00:00Z'
+    }
+  },
+  {
+    actions: [
+      {
+        ...commonAction,
+        type: ActionType.CREATE,
+        createdByUserType: TokenUserType.enum.user,
+        createdAt: '2023-01-01T00:00:00Z'
+      },
+      {
+        ...commonAction,
+        type: ActionType.ASSIGN,
+        createdByUserType: TokenUserType.enum.user,
+        createdAt: '2023-01-01T01:00:00Z',
+        assignedTo: 'user-id-2'
+      },
+      {
+        ...commonAction,
+        type: ActionType.UNASSIGN,
+        createdByUserType: TokenUserType.enum.user,
+        createdAt: '2023-01-01T02:00:00Z'
+      },
+      {
+        ...commonAction,
+        type: ActionType.ASSIGN,
+        createdByUserType: TokenUserType.enum.user,
+        createdAt: '2023-01-01T03:00:00Z',
+        assignedTo: 'user-id-4'
+      }
+    ],
+    expected: {
+      ...commonAction,
+      type: ActionType.ASSIGN,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-01-01T03:00:00Z',
+      assignedTo: 'user-id-4'
+    }
+  }
+]
+
+describe('findLastAssignmentAction', () => {
+  testCases.forEach(({ expected, actions }) => {
+    it(`When actions are ${actions.map(
+      ({ type, createdAt }) => `${type}-${createdAt}`
+    )}`, () => {
+      const result = findLastAssignmentAction(actions)
+      expect(result).toEqual(expected)
+    })
+  })
+})
+
+describe('getMixedPath', () => {
+  const cases = [
+    {
+      description: 'Simple flat dotted key',
+      obj: { 'user.name': 'Alice' },
+      path: 'user.name',
+      expected: 'Alice'
+    },
+    {
+      description: 'Simple nested key',
+      obj: { user: { name: 'Alice' } },
+      path: 'user.name',
+      expected: 'Alice'
+    },
+    {
+      description: 'Mixed: top-level dotted, then nested',
+      obj: {
+        'user.profile': {
+          age: 30
+        }
+      },
+      path: 'user.profile.age',
+      expected: 30
+    },
+    {
+      description: 'Mixed: nested then dotted',
+      obj: {
+        user: {
+          'profile.age': 30
+        }
+      },
+      path: 'user.profile.age',
+      expected: 30
+    },
+    {
+      description: 'Deep mixed nesting and compound keys',
+      obj: {
+        'user.profile': {
+          name: {
+            'first.name': {
+              markus: 'markus'
+            }
+          }
+        }
+      },
+      path: 'user.profile.name.first.name.markus',
+      expected: 'markus'
+    },
+    {
+      description: 'Array access with index',
+      obj: {
+        users: [{ name: 'Alice' }, { name: 'Bob' }]
+      },
+      path: 'users.1.name',
+      expected: 'Bob'
+    },
+    {
+      description: 'Compound key contains array index',
+      obj: {
+        'users.1.name': 'Charlie'
+      },
+      path: 'users.1.name',
+      expected: 'Charlie'
+    },
+    {
+      description: 'Fallback to default value on missing path',
+      obj: {
+        user: {
+          name: 'Alice'
+        }
+      },
+      path: 'user.age',
+      defaultValue: 99,
+      expected: 99
+    }
+  ]
+
+  test.each(cases)('$description', ({ obj, path, defaultValue, expected }) => {
+    expect(getMixedPath(obj, path, defaultValue)).toEqual(expected)
+  })
+})
+
+describe('deepMerge', () => {
+  const cases = [
+    {
+      description: 'Merging two simple objects',
+      obj1: { a: 1, b: 2 },
+      obj2: { b: 3, c: 4 },
+      expected: { a: 1, b: 3, c: 4 }
+    },
+    {
+      description: 'Merging nested objects',
+      obj1: { a: { x: 1 }, b: 2 },
+      obj2: { a: { y: 2 }, b: 3 },
+      // x is overridden completely
+      expected: { a: { y: 2 }, b: 3 }
+    },
+    {
+      description: 'Merging arrays within objects',
+      obj1: { a: [1, 2], b: 2 },
+      obj2: { a: [3, 4], b: 3 },
+      expected: { a: [3, 4], b: 3 }
+    },
+    {
+      description:
+        'Merging with deep nested structures and arrays in both objects',
+      obj1: {
+        a: {
+          x: [1, 2],
+          y: { z: [3] }
+        }
+      },
+      obj2: {
+        a: {
+          x: [4],
+          y: { z: [5, 6] }
+        }
+      },
+      expected: {
+        a: {
+          x: [4],
+          y: { z: [5, 6] }
+        }
+      }
+    },
+    {
+      description: 'Merging deep action declarations without mutating them',
+      obj1: {
+        actions: [
+          {
+            createdBy: '68497c34f1e1900a891aa81b',
+            createdByRole: 'REGISTRATION_AGENT',
+            createdAtLocation: 'b04a70a5-a158-44a9-a882-1e5714a7c0f5',
+            createdBySignature: '45450674-6523-441d-90d3-5ad66c7e57d1.png',
+            type: ActionType.DECLARE,
+            createdAt: '2025-06-11T12:53:08.085Z',
+            id: '01a8e3d9-6fce-4b4e-8aba-58f2f67976a0',
+
+            status: 'Accepted',
+            transactionId: '1238cce2-45e1-4c7d-98da-a357ef6bfc92',
+            declaration: {
+              'applicant.name': { firstname: 'Chris', surname: 'Sarajanen' }
+            }
+          }
+        ]
+      },
+      obj2: {
+        actions: [
+          {
+            createdBy: '68497c34f1e1900a891aa81b',
+            createdByRole: 'FIELD_AGENT',
+            createdAtLocation: 'b04a70a5-a158-44a9-a882-1e5714a7c0f5',
+            createdBySignature: '45450674-6523-441d-90d3-5ad66c7e57d1.png',
+            type: ActionType.DECLARE,
+            createdAt: '2025-06-11T12:53:08.085Z',
+            id: '01a8e3d9-6fce-4b4e-8aba-58f2f67976a0',
+            status: 'Accepted',
+            transactionId: '1238cce2-45e1-4c7d-98da-a357ef6bfc92',
+            declaration: {
+              'applicant.name': { firstname: 'Changed', surname: 'Name' }
+            }
+          }
+        ]
+      },
+      expected: {
+        actions: [
+          {
+            createdAt: '2025-06-11T12:53:08.085Z',
+            createdAtLocation: 'b04a70a5-a158-44a9-a882-1e5714a7c0f5',
+            createdBy: '68497c34f1e1900a891aa81b',
+            createdByRole: 'FIELD_AGENT',
+            createdBySignature: '45450674-6523-441d-90d3-5ad66c7e57d1.png',
+            declaration: {
+              'applicant.name': { firstname: 'Changed', surname: 'Name' }
+            },
+            id: '01a8e3d9-6fce-4b4e-8aba-58f2f67976a0',
+            status: 'Accepted',
+            transactionId: '1238cce2-45e1-4c7d-98da-a357ef6bfc92',
+            type: ActionType.DECLARE
+          }
+        ]
+      }
+    }
+  ]
+
+  test.each(cases)('$description', ({ obj1, obj2, expected }) => {
+    const cloneObj1 = cloneDeep(obj1)
+    const cloneObj2 = cloneDeep(obj2)
+
+    expect({ ...obj1, ...obj2 }).toEqual(expected)
+
+    // Make sure the method is not mutating the payload.
+    expect(obj1).toEqual(cloneObj1)
+    expect(obj2).toEqual(cloneObj2)
+  })
+})
+
+describe('getPendingAction', () => {
+  it('throws when it finds more than one pending action', () => {
+    const created = {
+      ...commonAction,
+      type: ActionType.CREATE,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-01-01T00:00:00Z',
+      status: 'Accepted' as const
+    }
+
+    const requested1 = {
+      ...commonAction,
+      id: 'action-id-2' as UUID,
+      type: ActionType.DECLARE,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-02-01T00:00:00Z',
+      status: 'Requested' as const
+    }
+
+    const requested2 = {
+      ...commonAction,
+      id: 'action-id-3' as UUID,
+      type: ActionType.REQUEST_CORRECTION,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-01-01T00:00:00Z',
+      status: 'Requested' as const
+    }
+
+    expect(() =>
+      getPendingAction([created, requested1, requested2])
+    ).toThrowError(
+      'Expected exactly one pending action, but found action-id-2, action-id-3'
+    )
+  })
+
+  it('finds the pending action', () => {
+    const created = {
+      ...commonAction,
+      type: ActionType.CREATE,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-01-01T00:00:00Z',
+      status: 'Accepted' as const
+    }
+
+    const requested1 = {
+      ...commonAction,
+      id: 'action-id-2' as UUID,
+      type: ActionType.DECLARE,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-02-01T00:00:00Z',
+      status: 'Accepted' as const
+    }
+
+    const requested2 = {
+      ...commonAction,
+      id: 'action-id-3' as UUID,
+      type: ActionType.REQUEST_CORRECTION,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-01-01T00:00:00Z',
+      status: 'Requested' as const
+    }
+
+    expect(getPendingAction([created, requested1, requested2])).toMatchObject(
+      requested2
+    )
+  })
+
+  it('handles the history having already a Requested & Accepted pair: still finds the one pending', () => {
+    const creates = {
+      ...commonAction,
+      type: ActionType.CREATE,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-01-01T00:00:00Z',
+      status: 'Accepted' as const
+    }
+
+    const requests = {
+      ...commonAction,
+      id: 'action-id-2' as UUID,
+      type: ActionType.DECLARE,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-02-01T00:00:00Z',
+      status: 'Requested' as const
+    }
+
+    const accepts = {
+      ...commonAction,
+      id: 'action-id-4' as UUID,
+      type: ActionType.DECLARE,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-02-01T00:00:00Z',
+      status: 'Accepted' as const,
+      originalActionId: 'action-id-2' as UUID
+    }
+
+    const requestsAgain = {
+      ...commonAction,
+      id: 'action-id-3' as UUID,
+      type: ActionType.REQUEST_CORRECTION,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-01-01T00:00:00Z',
+      status: 'Requested' as const
+    }
+
+    expect(
+      getPendingAction([creates, requests, accepts, requestsAgain])
+    ).toMatchObject(requestsAgain)
+  })
+
+  it('handles the history having already a Requested & Accepted pair: still throws on two requested', () => {
+    const creates = {
+      ...commonAction,
+      type: ActionType.CREATE,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-01-01T00:00:00Z',
+      status: 'Accepted' as const
+    }
+
+    const requests = {
+      ...commonAction,
+      id: 'action-id-2' as UUID,
+      type: ActionType.DECLARE,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-02-01T00:00:00Z',
+      status: 'Requested' as const
+    }
+
+    const accepts = {
+      ...commonAction,
+      id: 'action-id-3' as UUID,
+      type: ActionType.DECLARE,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-02-01T00:00:00Z',
+      status: 'Accepted' as const,
+      originalActionId: 'action-id-2' as UUID
+    }
+
+    const requestsAgain = {
+      ...commonAction,
+      id: 'action-id-4' as UUID,
+      type: ActionType.REQUEST_CORRECTION,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-01-01T00:00:00Z',
+      status: 'Requested' as const
+    }
+
+    const requestsOnceTooMany = {
+      ...commonAction,
+      id: 'action-id-5' as UUID,
+      type: ActionType.REGISTER,
+      createdByUserType: TokenUserType.enum.user,
+      createdAt: '2023-01-01T00:00:00Z',
+      status: 'Requested' as const
+    }
+
+    expect(() =>
+      getPendingAction([
+        creates,
+        requests,
+        accepts,
+        requestsAgain,
+        requestsOnceTooMany
+      ])
+    ).toThrowError(
+      'Expected exactly one pending action, but found action-id-4, action-id-5'
+    )
+  })
+
+  it('handles the history having rejected action', () => {
+    const actionSequence = [
+      {
+        type: ActionType.CREATE,
+        status: ActionStatus.Accepted
+      },
+      {
+        id: 'action-id-2' as UUID,
+        type: ActionType.DECLARE,
+        status: ActionStatus.Requested
+      },
+      {
+        type: ActionType.DECLARE,
+        status: ActionStatus.Accepted,
+        originalActionId: 'action-id-2' as UUID
+      },
+      {
+        id: 'action-id-5' as UUID,
+        type: ActionType.REGISTER,
+        status: ActionStatus.Requested
+      },
+      {
+        type: ActionType.REGISTER,
+        status: ActionStatus.Rejected,
+        originalActionId: 'action-id-5' as UUID
+      },
+      {
+        type: ActionType.REJECT,
+        status: ActionStatus.Requested,
+        content: { reason: 'Please reconsider' }
+      }
+    ].map(({ type, ...defaults }) =>
+      generateActionDocument({
+        configuration: tennisClubMembershipEvent,
+        action: type,
+        defaults
+      })
+    )
+    const lastAction = actionSequence[actionSequence.length - 1]
+    expect(getPendingAction(actionSequence)).toMatchObject(lastAction)
+  })
+})
+
+describe('omitHiddenPaginatedFields', () => {
+  it('removes fields that are hidden by field conditionals when page conditional is true', () => {
+    const rng = createPrng(101)
+
+    const fields = getDeclarationFields(tennisClubMembershipEvent)
+
+    const declarationConfig = getDeclaration(tennisClubMembershipEvent)
+
+    const declaration = fieldConfigsToActionPayload(fields, rng)
+    const declarationWithoutHiddenFields = omitHiddenPaginatedFields(
+      declarationConfig,
+      declaration,
+      {}
+    )
+
+    const missingKeys = difference(
+      Object.keys(declaration),
+      Object.keys(declarationWithoutHiddenFields)
+    )
+
+    expect(missingKeys).toEqual([
+      'applicant.dob', // dobUnknown is true
+      'applicant.isRecommendedByFieldAgent', // user is not field agent
+      'senior-pass.id', // dob is not before the threshhold
+      'senior-pass.recommender', // dob is not before threshhold
+      'recommender.name', // recommender.none is true
+      'recommender.id' // recommender.none is true
+    ])
+  })
+
+  it('removes fields that are hidden (but allows hidden fields with null value) by field conditionals when page conditional is true', () => {
+    const rng = createPrng(101)
+
+    const fields = getDeclarationFields(tennisClubMembershipEvent)
+
+    const declarationConfig = getDeclaration(tennisClubMembershipEvent)
+
+    const declaration = fieldConfigsToActionPayload(fields, rng)
+    const declarationWithoutHiddenFields = omitHiddenPaginatedFields(
+      declarationConfig,
+      { ...declaration, 'recommender.name': null, 'recommender.id': null },
+      {},
+      true
+    )
+
+    const missingKeys = difference(
+      Object.keys(declaration),
+      Object.keys(declarationWithoutHiddenFields)
+    )
+
+    expect(missingKeys).toEqual([
+      'applicant.dob', // dobUnknown is true
+      'applicant.isRecommendedByFieldAgent', // user is not field agent
+      'senior-pass.id', // dob is not before the threshhold
+      'senior-pass.recommender' // dob is not before threshhold
+    ])
+
+    expect(missingKeys).not.toContain('recommender.name')
+    expect(missingKeys).not.toContain('recommender.id')
+  })
+
+  it('keeps a field that appears on both a hidden page and a visible page', () => {
+    // Page A is always visible; page B is only visible when toggle=true.
+    // Both pages declare a field with the same id 'shared.field'.
+    // When toggle is false (page B hidden), 'shared.field' must be kept because page A is visible.
+    const label = generateTranslationConfig('dummy label')
+    const sharedField = {
+      id: 'shared.field',
+      type: FieldType.TEXT,
+      required: false,
+      conditionals: [],
+      label
+    }
+    const formConfig: DeclarationFormConfig = {
+      label,
+      pages: [
+        {
+          id: 'page-a',
+          type: 'FORM',
+          title: label,
+          requireCompletionToContinue: false,
+          fields: [sharedField]
+        },
+        {
+          id: 'page-b',
+          type: 'FORM',
+          title: label,
+          requireCompletionToContinue: false,
+          conditional: field('toggle').isEqualTo('true'),
+          fields: [sharedField]
+        }
+      ]
+    }
+
+    const values = { 'shared.field': 'value', toggle: 'false' }
+    const result = omitHiddenPaginatedFields(formConfig, values, {})
+
+    expect(result).toMatchObject({ 'shared.field': 'value' })
+  })
+})
+
+describe('getCompleteActionAnnotation', () => {
+  const baseEvent: EventDocument = {
+    id: 'event-id-1' as UUID,
+    type: 'TENNIS_CLUB_MEMBERSHIP',
+    createdAt: '2023-01-01T00:00:00Z',
+    updatedAt: '2023-01-01T00:00:00Z',
+    trackingId: 'tracking-id-1',
+    actions: []
+  }
+
+  it('merges annotation with action.annotation when no originalActionId', () => {
+    const action = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: { annotation: { fieldB: 'from-action' } }
+    })
+
+    const result = getCompleteActionAnnotation(baseEvent, action)
+
+    expect(result).toEqual({ fieldB: 'from-action' })
+  })
+
+  it('ignores missing original action and merges annotation with action.annotation', () => {
+    const action = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        originalActionId: 'non-existent-id' as UUID,
+        annotation: { fieldB: 'from-action' }
+      }
+    })
+
+    const result = getCompleteActionAnnotation(baseEvent, action)
+
+    expect(result).toEqual({ fieldB: 'from-action' })
+  })
+
+  it('ignores original action annotation when original status is not Requested', () => {
+    const originalAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        status: ActionStatus.Accepted,
+        annotation: { fieldC: 'from-original' }
+      }
+    }) satisfies ActionDocument
+
+    const action = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        originalActionId: originalAction.id,
+        annotation: { fieldB: 'from-action' }
+      }
+    })
+
+    const event: EventDocument = { ...baseEvent, actions: [originalAction] }
+
+    const result = getCompleteActionAnnotation(event, action)
+
+    expect(result).toEqual({ fieldB: 'from-action' })
+  })
+
+  it('merges original action annotation when original status is Requested', () => {
+    const originalAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        status: ActionStatus.Requested,
+        annotation: { fieldC: 'from-original' }
+      }
+    }) satisfies ActionDocument
+
+    const action = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        originalActionId: originalAction.id,
+        annotation: { fieldB: 'from-action' }
+      }
+    })
+
+    const event: EventDocument = { ...baseEvent, actions: [originalAction] }
+
+    const result = getCompleteActionAnnotation(event, action)
+
+    expect(result).toEqual({
+      fieldB: 'from-action',
+      fieldC: 'from-original'
+    })
+  })
+
+  it('action.annotation overrides original action annotation', () => {
+    const originalAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        status: ActionStatus.Requested,
+        annotation: { field: 'from-original', fieldO: 'only-in-original' }
+      }
+    }) satisfies ActionDocument
+
+    const action = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        originalActionId: originalAction.id,
+        annotation: { field: 'from-action' }
+      }
+    })
+
+    const event: EventDocument = { ...baseEvent, actions: [originalAction] }
+
+    const result = getCompleteActionAnnotation(event, action)
+
+    expect(result).toEqual({ field: 'from-action', fieldO: 'only-in-original' })
+  })
+})
+
+describe('getCompleteActionContent', () => {
+  const baseEvent: EventDocument = {
+    id: 'event-id-1' as UUID,
+    type: 'TENNIS_CLUB_MEMBERSHIP',
+    createdAt: '2023-01-01T00:00:00Z',
+    updatedAt: '2023-01-01T00:00:00Z',
+    trackingId: 'tracking-id-1',
+    actions: []
+  }
+
+  it('returns undefined for actions that have no content field', () => {
+    const action = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE
+    })
+
+    const result = getCompleteActionContent(baseEvent, action)
+
+    expect(result).toBeUndefined()
+  })
+
+  it('returns own content when action has content and no originalActionId', () => {
+    const action = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.APPROVE_CORRECTION,
+      defaults: { content: { immediateCorrection: true } }
+    })
+
+    const result = getCompleteActionContent(baseEvent, action)
+    expect(result).toEqual({ immediateCorrection: true })
+  })
+
+  it('merges own content with original content, current action wins on conflict', () => {
+    const originalAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.APPROVE_CORRECTION,
+      defaults: {
+        status: ActionStatus.Requested,
+        content: { immediateCorrection: false }
+      }
+    })
+
+    const action = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.APPROVE_CORRECTION,
+      defaults: {
+        originalActionId: originalAction.id,
+        content: { immediateCorrection: true }
+      }
+    })
+
+    const event: EventDocument = { ...baseEvent, actions: [originalAction] }
+
+    const result = getCompleteActionContent(event, action)
+
+    // current action wins: true overrides false from the original
+    expect(result).toEqual({ immediateCorrection: true })
+  })
+
+  it('inherits content from Requested original action when own content is absent', () => {
+    const originalAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.APPROVE_CORRECTION,
+      defaults: {
+        status: ActionStatus.Requested,
+        content: { immediateCorrection: true }
+      }
+    })
+
+    const action = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.APPROVE_CORRECTION,
+      defaults: { originalActionId: originalAction.id }
+    })
+
+    const event: EventDocument = { ...baseEvent, actions: [originalAction] }
+
+    const result = getCompleteActionContent(event, action)
+
+    expect(result).toEqual({ immediateCorrection: true })
+  })
+
+  it('inherits content from original action regardless of status (Accepted or Rejected)', () => {
+    const originalAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.APPROVE_CORRECTION,
+      defaults: {
+        status: ActionStatus.Accepted,
+        content: { immediateCorrection: true }
+      }
+    })
+
+    const action = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.APPROVE_CORRECTION,
+      defaults: { originalActionId: originalAction.id }
+    })
+
+    const event: EventDocument = { ...baseEvent, actions: [originalAction] }
+
+    const result = getCompleteActionContent(event, action)
+
+    expect(result).toEqual({ immediateCorrection: true })
+  })
+
+  it('inherits content from a Rejected original action', () => {
+    const originalAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.APPROVE_CORRECTION,
+      defaults: {
+        status: ActionStatus.Rejected,
+        content: { immediateCorrection: true }
+      }
+    })
+
+    const action = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.APPROVE_CORRECTION,
+      defaults: { originalActionId: originalAction.id }
+    })
+
+    const event: EventDocument = { ...baseEvent, actions: [originalAction] }
+
+    const result = getCompleteActionContent(event, action)
+
+    expect(result).toEqual({ immediateCorrection: true })
+  })
+
+  it('returns undefined when originalActionId is set but original action is not found', () => {
+    const action = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.APPROVE_CORRECTION,
+      defaults: { originalActionId: 'non-existent-id' as UUID }
+    })
+
+    const result = getCompleteActionContent(baseEvent, action)
+
+    expect(result).toBeUndefined()
+  })
+})
+
+describe('getActionConfig() – NOTIFY fallback and isolation', () => {
+  const configWithoutNotify = {
+    actions: [
+      {
+        type: ActionType.DECLARE,
+        label: { id: 'declare', defaultMessage: 'Declare', description: '' }
+      }
+    ]
+  }
+
+  const configWithNotify = {
+    actions: [
+      {
+        type: ActionType.NOTIFY,
+        label: { id: 'notify', defaultMessage: 'Notify', description: '' }
+      },
+      {
+        type: ActionType.DECLARE,
+        label: { id: 'declare', defaultMessage: 'Declare', description: '' }
+      }
+    ]
+  }
+
+  const configWithoutEither = { actions: [] }
+
+  it('falls back to DECLARE config when no NOTIFY config is present', () => {
+    const result = getActionConfig({
+      eventConfiguration: configWithoutNotify as unknown as EventConfig,
+      actionType: ActionType.NOTIFY
+    })
+    expect(result?.type).toBe(ActionType.DECLARE)
+  })
+
+  it('returns NOTIFY config when present', () => {
+    const result = getActionConfig({
+      eventConfiguration: configWithNotify as unknown as EventConfig,
+      actionType: ActionType.NOTIFY
+    })
+    expect(result?.type).toBe(ActionType.NOTIFY)
+  })
+
+  it('returns DECLARE config independently when NOTIFY config is also present', () => {
+    const result = getActionConfig({
+      eventConfiguration: configWithNotify as unknown as EventConfig,
+      actionType: ActionType.DECLARE
+    })
+    expect(result?.type).toBe(ActionType.DECLARE)
+  })
+
+  it('returns undefined when neither NOTIFY nor DECLARE config exists', () => {
+    const result = getActionConfig({
+      eventConfiguration: configWithoutEither as unknown as EventConfig,
+      actionType: ActionType.NOTIFY
+    })
+    expect(result).toBeUndefined()
+  })
+})
+
+describe('getActionConfig(): correction actions resolve independently', () => {
+  const configWithAllCorrectionActions = {
+    actions: [
+      {
+        type: ActionType.REQUEST_CORRECTION,
+        label: {
+          id: 'request-correction',
+          defaultMessage: 'Request correction',
+          description: ''
+        },
+        correctionForm: { pages: [] }
+      },
+      {
+        type: ActionType.APPROVE_CORRECTION,
+        label: {
+          id: 'approve-correction',
+          defaultMessage: 'Approve correction',
+          description: ''
+        }
+      },
+      {
+        type: ActionType.REJECT_CORRECTION,
+        label: {
+          id: 'reject-correction',
+          defaultMessage: 'Reject correction',
+          description: ''
+        }
+      }
+    ]
+  }
+
+  const configWithOnlyRequestCorrection = {
+    actions: [
+      {
+        type: ActionType.REQUEST_CORRECTION,
+        label: {
+          id: 'request-correction',
+          defaultMessage: 'Request correction',
+          description: ''
+        },
+        correctionForm: { pages: [] }
+      }
+    ]
+  }
+
+  it('returns its own config for APPROVE_CORRECTION when present', () => {
+    const result = getActionConfig({
+      eventConfiguration:
+        configWithAllCorrectionActions as unknown as EventConfig,
+      actionType: ActionType.APPROVE_CORRECTION
+    })
+    expect(result?.type).toBe(ActionType.APPROVE_CORRECTION)
+  })
+
+  it('returns its own config for REJECT_CORRECTION when present', () => {
+    const result = getActionConfig({
+      eventConfiguration:
+        configWithAllCorrectionActions as unknown as EventConfig,
+      actionType: ActionType.REJECT_CORRECTION
+    })
+    expect(result?.type).toBe(ActionType.REJECT_CORRECTION)
+  })
+
+  it('no longer aliases APPROVE_CORRECTION to REQUEST_CORRECTION when APPROVE_CORRECTION is absent', () => {
+    const result = getActionConfig({
+      eventConfiguration:
+        configWithOnlyRequestCorrection as unknown as EventConfig,
+      actionType: ActionType.APPROVE_CORRECTION
+    })
+    expect(result).toBeUndefined()
+  })
+
+  it('no longer aliases REJECT_CORRECTION to REQUEST_CORRECTION when REJECT_CORRECTION is absent', () => {
+    const result = getActionConfig({
+      eventConfiguration:
+        configWithOnlyRequestCorrection as unknown as EventConfig,
+      actionType: ActionType.REJECT_CORRECTION
+    })
+    expect(result).toBeUndefined()
+  })
+})
+
+describe('getActionFormFields()', () => {
+  const commentsField = {
+    id: 'register.dialog.comments',
+    type: FieldType.TEXTAREA,
+    required: true,
+    label: generateTranslationConfig('Comments')
+  }
+
+  const configWithRegisterForm = {
+    ...tennisClubMembershipEvent,
+    actions: tennisClubMembershipEvent.actions.map((action) =>
+      action.type === ActionType.REGISTER
+        ? { ...action, form: [commentsField] }
+        : action
+    )
+  }
+
+  it('returns the form fields configured for the action', () => {
+    expect(
+      getActionFormFields(configWithRegisterForm, ActionType.REGISTER)
+    ).toEqual([commentsField])
+  })
+
+  it('returns an empty array when the action has no form configured', () => {
+    expect(
+      getActionFormFields(tennisClubMembershipEvent, ActionType.REGISTER)
+    ).toEqual([])
+  })
+
+  it('does not fall back to DECLARE config for NOTIFY dialog fields', () => {
+    const configWithDeclareForm = {
+      ...tennisClubMembershipEvent,
+      actions: tennisClubMembershipEvent.actions.map((action) =>
+        action.type === ActionType.DECLARE
+          ? { ...action, form: [commentsField] }
+          : action
+      )
+    }
+
+    expect(
+      getActionFormFields(configWithDeclareForm, ActionType.NOTIFY)
+    ).toEqual([])
+  })
+})
+
+describe('getActionAnnotationFields() with dialog form', () => {
+  it('returns review fields and dialog form fields for DECLARE', () => {
+    const declareAction = tennisClubMembershipEvent.actions.find(
+      (action) => action.type === ActionType.DECLARE
+    )
+
+    if (!declareAction || declareAction.type !== ActionType.DECLARE) {
+      throw new Error('DECLARE action not found in fixture')
+    }
+
+    const dialogField = {
+      id: 'declare.dialog.comments',
+      type: FieldType.TEXTAREA,
+      label: generateTranslationConfig('Comments')
+    }
+
+    const fields = getActionAnnotationFields({
+      ...declareAction,
+      form: [dialogField]
+    })
+
+    expect(fields).toEqual([...declareAction.review.fields, dialogField])
+  })
+})

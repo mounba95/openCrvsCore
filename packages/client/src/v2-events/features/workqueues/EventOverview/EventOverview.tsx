@@ -1,0 +1,176 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import React from 'react'
+import { useTypedParams } from 'react-router-typesafe-routes/dom'
+import { useIntl } from 'react-intl'
+import {
+  EventDocument,
+  getCurrentEventState,
+  dangerouslyGetCurrentEventStateWithDrafts,
+  EventIndex,
+  applyDraftToEventIndex,
+  deepDropNulls
+} from '@opencrvs/commons/client'
+import { Content, ContentSize } from '@opencrvs/components/lib/Content'
+import { IconWithName } from '@client/v2-events/components/IconWithName'
+import { ROUTES } from '@client/v2-events/routes'
+import { useEventConfiguration } from '@client/v2-events/features/events/useEventConfiguration'
+import { useUsers } from '@client/v2-events/hooks/useUsers'
+import { withSuspense } from '@client/v2-events/components/withSuspense'
+import { flattenEventIndex, getUsersFullName } from '@client/v2-events/utils'
+import { useEventTitle } from '@client/v2-events/features/events/useEvents/useEventTitle'
+import { useDrafts } from '../../drafts/useDrafts'
+import { DuplicateWarning } from '../../events/actions/dedup/DuplicateWarning'
+import { EventSummary } from './components/EventSummary'
+import { useEventOverviewInfo } from './components/useEventOverviewInfo'
+
+/**
+ * Renders the event overview page which shows a summary of the event.
+ */
+function EventOverviewFull({ event }: { event: EventDocument }) {
+  const { eventConfiguration } = useEventConfiguration(event.type)
+  const eventIndex = getCurrentEventState(event, eventConfiguration)
+  const { status } = eventIndex
+  const { getRemoteDraftByEventId } = useDrafts()
+  const draft = getRemoteDraftByEventId(eventIndex.id, {
+    refetchOnMount: 'always'
+  })
+
+  const eventWithDrafts = draft
+    ? dangerouslyGetCurrentEventStateWithDrafts({
+        event,
+        draft,
+        configuration: eventConfiguration
+      })
+    : getCurrentEventState(event, eventConfiguration)
+
+  const { getUsers } = useUsers()
+  const intl = useIntl()
+
+  const assignedToUser = getUsers.useQueryById(
+    eventWithDrafts.assignedTo || '',
+    {
+      enabled: !!eventWithDrafts.assignedTo
+    }
+  )
+
+  const assignedTo = assignedToUser.data
+    ? getUsersFullName(assignedToUser.data.name)
+    : null
+
+  const { flags, ...flattenedEventIndex } = {
+    ...flattenEventIndex(eventWithDrafts),
+    // drafts should not affect the status of the event
+    // so the status and flags are taken from the eventIndex
+    'event.status': status,
+    'event.assignedTo': assignedTo,
+    flags: eventIndex.flags
+  }
+  const { getEventTitle } = useEventTitle()
+  const { title } = getEventTitle(eventConfiguration, eventWithDrafts)
+
+  return (
+    <Content
+      icon={() => <IconWithName flags={flags} name={''} status={status} />}
+      size={ContentSize.LARGE}
+      title={title}
+      titleColor={event.id ? 'copy' : 'grey600'}
+    >
+      <EventSummary
+        event={flattenedEventIndex}
+        eventConfiguration={eventConfiguration}
+        eventDocument={event}
+        eventIndex={eventIndex}
+      />
+    </Content>
+  )
+}
+
+/**
+ * Renders the protected event overview page with PII hidden in the event summary
+ */
+function EventOverviewProtected({ eventIndex }: { eventIndex: EventIndex }) {
+  const { eventConfiguration } = useEventConfiguration(eventIndex.type)
+  const { status } = eventIndex
+  const { getRemoteDraftByEventId } = useDrafts()
+  const draft = getRemoteDraftByEventId(eventIndex.id)
+
+  const eventWithDrafts = draft
+    ? deepDropNulls(
+        applyDraftToEventIndex(eventIndex, draft, eventConfiguration)
+      )
+    : eventIndex
+
+  const { getUsers } = useUsers()
+
+  const assignedToUser = getUsers.useQueryById(
+    eventWithDrafts.assignedTo || '',
+    {
+      enabled: !!eventWithDrafts.assignedTo
+    }
+  )
+  const assignedTo = assignedToUser.data
+    ? getUsersFullName(assignedToUser.data.name)
+    : null
+
+  const { flags, ...flattenedEventIndex } = {
+    ...flattenEventIndex(eventWithDrafts),
+    // drafts should not affect the status of the event
+    // so the status and flags are taken from the eventIndex
+    'event.status': status,
+    'event.assignedTo': assignedTo,
+    flags: eventIndex.flags
+  }
+
+  const { getEventTitle } = useEventTitle()
+  const { title } = getEventTitle(eventConfiguration, eventWithDrafts)
+
+  return (
+    <Content
+      icon={() => <IconWithName flags={flags} name={''} status={status} />}
+      size={ContentSize.LARGE}
+      title={title}
+      titleColor={eventIndex.id ? 'copy' : 'grey600'}
+    >
+      <EventSummary
+        hideSecuredFields
+        event={flattenedEventIndex}
+        eventConfiguration={eventConfiguration}
+        eventIndex={eventIndex}
+      />
+    </Content>
+  )
+}
+
+function EventOverviewContainer() {
+  const params = useTypedParams(ROUTES.V2.EVENTS.EVENT)
+  const { eventIndex, fullEvent, shouldShowFullOverview } =
+    useEventOverviewInfo(params.eventId)
+
+  return (
+    <>
+      {eventIndex.potentialDuplicates.length > 0 && (
+        <DuplicateWarning
+          duplicateTrackingIds={eventIndex.potentialDuplicates.map(
+            ({ trackingId }) => trackingId
+          )}
+        />
+      )}
+      {shouldShowFullOverview ? (
+        <EventOverviewFull event={fullEvent} />
+      ) : (
+        <EventOverviewProtected eventIndex={eventIndex} />
+      )}
+    </>
+  )
+}
+
+export const EventOverviewIndex = withSuspense(EventOverviewContainer)

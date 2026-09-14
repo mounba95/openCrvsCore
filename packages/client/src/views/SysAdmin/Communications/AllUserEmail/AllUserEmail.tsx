@@ -1,0 +1,138 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import React, { useState } from 'react'
+import { useIntl } from 'react-intl'
+import { Content } from '@opencrvs/components/lib/Content'
+import { messages } from '@client/i18n/messages/views/config'
+import { buttonMessages, constantsMessages } from '@client/i18n/messages'
+import {
+  InputField,
+  TextArea,
+  TextInput,
+  Button,
+  Icon,
+  Dialog
+} from '@opencrvs/components'
+import styled from 'styled-components'
+import { useMutation } from '@tanstack/react-query'
+import { useDispatch } from 'react-redux'
+import { toggleEmailAllUsersFeedbackToast } from '@client/notification/actions'
+import { trpcClient } from '@client/v2-events/trpc'
+
+const Form = styled.form`
+  & > :not(:last-child) {
+    margin-bottom: 24px;
+  }
+`
+
+const AllUserEmail = () => {
+  const intl = useIntl()
+  const [subject, setSubject] = useState('')
+  const [body, setBody] = useState('')
+  const [isConfirmationModalOpen, setConfirmationModalOpen] = useState(false)
+
+  const dispatch = useDispatch()
+  const hideModal = () => setConfirmationModalOpen(false)
+  const resetForm = () => {
+    setSubject('')
+    setBody('')
+  }
+
+  const broadcastMutation = useMutation({
+    mutationFn: () =>
+      trpcClient.announcement.broadcast.mutate({
+        subject,
+        body,
+        locale: intl.locale
+      }),
+    onSuccess: () => {
+      dispatch(
+        toggleEmailAllUsersFeedbackToast({ visible: true, type: 'success' })
+      )
+      resetForm()
+    },
+    onError: () => {
+      dispatch(
+        toggleEmailAllUsersFeedbackToast({ visible: true, type: 'error' })
+      )
+    }
+  })
+
+  const handleConfirmSubmit = () => {
+    hideModal()
+    broadcastMutation.mutate()
+  }
+
+  return (
+    <>
+      <Content
+        title={intl.formatMessage(messages.emailAllUsersTitle)}
+        titleColor="copy"
+        subtitle={intl.formatMessage(messages.emailAllUsersSubtitle)}
+      >
+        <Form
+          onSubmit={(e) => {
+            e.preventDefault()
+            setConfirmationModalOpen(true)
+          }}
+        >
+          <InputField
+            id="subject"
+            label={intl.formatMessage(constantsMessages.emailSubject)}
+            touched={false}
+            required={true}
+            hideAsterisk
+          >
+            <TextInput
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+            />
+          </InputField>
+          <InputField
+            id="body"
+            label={intl.formatMessage(constantsMessages.emailBody)}
+            touched={false}
+            required={true}
+            hideAsterisk
+          >
+            <TextArea
+              value={body}
+              onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
+                setBody(e.target.value)
+              }
+            />
+          </InputField>
+          <Button type="primary" disabled={!subject || !body}>
+            <Icon name="PaperPlaneTilt" size="medium" />
+            {intl.formatMessage(buttonMessages.send)}
+          </Button>
+        </Form>
+      </Content>
+      <Dialog
+        title={intl.formatMessage(messages.emailAllUsersModalTitle)}
+        isOpen={isConfirmationModalOpen}
+        onClose={hideModal}
+        actions={[
+          <Button key="cancel" type="tertiary" onClick={hideModal}>
+            {intl.formatMessage(buttonMessages.cancel)}
+          </Button>,
+          <Button key="confirm" type="primary" onClick={handleConfirmSubmit}>
+            {intl.formatMessage(buttonMessages.confirm)}
+          </Button>
+        ]}
+      >
+        {intl.formatMessage(messages.emailAllUsersModalSupportingCopy)}
+      </Dialog>
+    </>
+  )
+}
+
+export default AllUserEmail

@@ -1,0 +1,1145 @@
+/* eslint-disable max-lines */
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import type { Meta, StoryObj } from '@storybook/react'
+import { expect, fireEvent, fn, userEvent, within } from '@storybook/test'
+import React, { useRef } from 'react'
+import styled from 'styled-components'
+import { noop } from 'lodash'
+import {
+  ConditionalType,
+  field,
+  FieldType,
+  not,
+  FieldConfig,
+  EventConfig,
+  EventState,
+  generateTranslationConfig,
+  tennisClubMembershipEvent,
+  ActionStatus
+} from '@opencrvs/commons/client'
+import type { EventDocument, UUID } from '@opencrvs/commons/client'
+
+import {
+  FormFieldGenerator,
+  FormFieldGeneratorHandle,
+  FormFieldGeneratorPropsWithoutRef
+} from '@client/v2-events/components/forms/FormFieldGenerator'
+import { TRPCProvider } from '@client/v2-events/trpc'
+import { FormWizard } from '@client/v2-events/features/events/components/FormWizard'
+import {
+  getTestValidatorContext,
+  withValidatorContext
+} from '../../../../../.storybook/decorators'
+
+const meta: Meta<FormFieldGeneratorPropsWithoutRef> = {
+  title: 'FormFieldGenerator/Interaction',
+  decorators: [
+    (Story, context) => (
+      <TRPCProvider>
+        <Story {...context} />
+      </TRPCProvider>
+    ),
+    withValidatorContext
+  ]
+}
+
+export default meta
+
+const StyledFormFieldGenerator = styled(FormFieldGenerator)`
+  width: '400px';
+`
+
+type Story = StoryObj<FormFieldGeneratorPropsWithoutRef>
+
+const fields = [
+  {
+    id: 'tennis-member.dob',
+    type: FieldType.DATE,
+    required: true,
+    label: {
+      defaultMessage: 'Date of birth',
+      description: 'This is the label for the field',
+      id: 'event.birth.action.declare.form.section.person.field.dob.label'
+    },
+    conditionals: [
+      {
+        type: ConditionalType.SHOW,
+        conditional: not(field('tennis-member.dobUnknown').isEqualTo(true))
+      }
+    ]
+  },
+  {
+    id: 'tennis-member.dobUnknown',
+    type: FieldType.CHECKBOX,
+    required: false,
+    defaultValue: false,
+    label: {
+      defaultMessage: 'Exact date of birth unknown',
+      description: 'This is the label for the field',
+      id: 'event.birth.action.declare.form.section.person.field.age.checkbox.label'
+    }
+  },
+  {
+    id: 'tennis-member.age',
+    type: FieldType.NUMBER,
+    required: true,
+    label: {
+      defaultMessage: 'Age of the member',
+      description: 'This is the label for the field',
+      id: 'event.birth.action.declare.form.section.tennis-member.field.age.label'
+    },
+    conditionals: [
+      {
+        type: ConditionalType.SHOW,
+        conditional: field('tennis-member.dobUnknown').isEqualTo(true)
+      }
+    ]
+  }
+] satisfies FieldConfig[]
+
+const declaration = {
+  'tennis-member.dob': '2020-11-12',
+  'tennis-member.dobUnknown': false
+} satisfies EventState
+
+/**
+ * Test case for a bug where conditional values were not being updated correctly due to the wrong apply order of items.
+ */
+export const UpdateCondtionalValues: Story = {
+  name: 'Updating existing declaration with conditional values',
+  parameters: {
+    layout: 'centered',
+    chromatic: { disableSnapshot: true }
+  },
+  render: function Component(args) {
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={fields}
+        formValues={declaration}
+        id="my-form"
+      />
+    )
+  },
+  play: async ({ canvasElement, step }) => {
+    const canvas = within(canvasElement)
+
+    await step('Renders the form with correct initial values', async () => {
+      await canvas.findByText('Date of birth')
+      await canvas.findByDisplayValue(2020)
+      await canvas.findByDisplayValue(11)
+      await canvas.findByDisplayValue(12)
+
+      await canvas.findByText('Exact date of birth unknown')
+    })
+
+    await step(
+      'Hides date input when conditional checkbox is checked',
+      async () => {
+        await fireEvent.click(
+          await canvas.findByText('Exact date of birth unknown')
+        )
+
+        await canvas.findByText('Age of the member')
+
+        await expect(
+          canvas.queryByText('Date of birth')
+        ).not.toBeInTheDocument()
+        await expect(canvas.queryByDisplayValue(2020)).not.toBeInTheDocument()
+        await expect(canvas.queryByDisplayValue(11)).not.toBeInTheDocument()
+        await expect(canvas.queryByDisplayValue(12)).not.toBeInTheDocument()
+      }
+    )
+
+    await step('fills in age input', async () => {
+      const ageInput = await canvas.findByTestId('number__tennis-member____age')
+      await userEvent.type(ageInput, '75')
+      ageInput.blur()
+    })
+
+    await step(
+      'Previous values are visible when checkbox is unchecked ',
+      async () => {
+        await fireEvent.click(
+          await canvas.findByText('Exact date of birth unknown')
+        )
+        await canvas.findByText('Date of birth')
+        await canvas.findByDisplayValue(2020)
+        await canvas.findByDisplayValue(11)
+        await canvas.findByDisplayValue(12)
+
+        await canvas.findByText('Exact date of birth unknown')
+      }
+    )
+
+    await step(
+      'Previous values are visible when checkbox is checked',
+      async () => {
+        await fireEvent.click(
+          await canvas.findByText('Exact date of birth unknown')
+        )
+        await canvas.findByText('Age of the member')
+        await canvas.findByDisplayValue(75)
+
+        await canvas.findByText('Exact date of birth unknown')
+      }
+    )
+  }
+}
+
+const tennisFamilyMembership = [
+  {
+    id: `tennis.membership.parent.firstname`,
+    type: FieldType.TEXT,
+    label: generateTranslationConfig('parent firstname')
+  },
+  {
+    id: `tennis.membership.parent.surname`,
+    type: FieldType.TEXT,
+    label: generateTranslationConfig('parent surname')
+  },
+  {
+    id: `tennis.membership.child.firstname`,
+    type: FieldType.TEXT,
+    label: generateTranslationConfig('child firstname')
+  },
+  {
+    id: `tennis.membership.child.surname`,
+    type: FieldType.TEXT,
+    label: generateTranslationConfig('child surname'),
+    parent: field('tennis.membership.parent.surname'),
+    value: field('tennis.membership.parent.surname')
+  }
+]
+
+const tennisFamilyMembershipDeclaration = {
+  'tennis.membership.parent.firstname': 'Roger',
+  'tennis.membership.parent.surname': '',
+  'tennis.membership.child.firstname': 'Lenny',
+  'tennis.membership.child.surname': ''
+} satisfies EventState
+
+/**
+ * Test case for a bug where values of the parent field were not being copied to the dependent field, when the parent field is changed.
+ */
+export const UpdateParentFieldValues: Story = {
+  name: 'Updating values of the parent field should update the child field value too',
+  parameters: {
+    layout: 'centered',
+    chromatic: { disableSnapshot: true }
+  },
+  render: function Component(args) {
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={tennisFamilyMembership}
+        formValues={tennisFamilyMembershipDeclaration}
+        id="my-form"
+      />
+    )
+  },
+  play: async ({ canvasElement, step }) => {
+    const canvas = within(canvasElement)
+
+    await step('Renders the form with correct initial values', async () => {
+      await canvas.findByText('parent firstname')
+      await canvas.findByDisplayValue('Roger')
+
+      await canvas.findByText('child firstname')
+      await canvas.findByDisplayValue('Lenny')
+    })
+
+    await step('fills in parent surname input', async () => {
+      await userEvent.type(
+        await canvas.findByTestId(
+          'text__tennis____membership____parent____surname'
+        ),
+        'Federer'
+      )
+      await userEvent.click(await canvas.findByText('parent firstname'))
+    })
+
+    await step(
+      'Renders the child surname with correct values from parent surname field',
+      async () => {
+        await expect(
+          canvas.getByTestId('text__tennis____membership____child____surname')
+        ).toHaveValue('Federer')
+      }
+    )
+
+    await step('change parent surname value', async () => {
+      await userEvent.type(
+        await canvas.findByTestId(
+          'text__tennis____membership____parent____surname'
+        ),
+        ' The GOAT'
+      )
+      await userEvent.click(await canvas.findByText('parent firstname'))
+    })
+
+    await step(
+      'Renders the child surname with correct values from parent surname field',
+      async () => {
+        await expect(
+          canvas.getByTestId('text__tennis____membership____child____surname')
+        ).toHaveValue('Federer The GOAT')
+      }
+    )
+  }
+}
+
+const tennisStyleFields = [
+  {
+    id: 'tennis.style',
+    type: FieldType.SELECT,
+    required: true,
+    label: generateTranslationConfig('tennis style'),
+    options: [
+      {
+        label: generateTranslationConfig('defensive'),
+        value: 'defensive'
+      },
+      {
+        label: generateTranslationConfig('allrounder'),
+        value: 'allrounder'
+      },
+      {
+        label: generateTranslationConfig('hard-hitter'),
+        value: 'hard-hitter'
+      }
+    ]
+  },
+  {
+    id: `tennis.style.firstname`,
+    type: FieldType.TEXT,
+    required: true,
+    label: generateTranslationConfig('first name'),
+    parent: field('tennis.style')
+  }
+] satisfies FieldConfig[]
+
+export const EmptiesWhenParentChanges: Story = {
+  name: 'Toggling parent field resets children',
+  parameters: {
+    layout: 'centered',
+    chromatic: { disableSnapshot: true }
+  },
+  render: function Component(args) {
+    const formValues = {
+      'tennis.style': 'defensive',
+      'tennis.style.firstname': 'Roger'
+    }
+
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={tennisStyleFields}
+        formValues={formValues}
+        id="my-form"
+      />
+    )
+  },
+  play: async ({ canvasElement, step }) => {
+    const canvas = within(canvasElement)
+
+    await step('Renders the form with correct initial values', async () => {
+      await canvas.findByText('tennis style')
+      await canvas.findByText('defensive')
+
+      await canvas.findByText('first name')
+      await canvas.findByDisplayValue('Roger')
+    })
+
+    await step(
+      'Shows new, empty firstname input when selecting a different style',
+      async () => {
+        await userEvent.click(await canvas.findByText('defensive'))
+        await userEvent.click(await canvas.findByText('allrounder'))
+
+        await canvas.findByText('tennis style')
+        await canvas.findByText('allrounder')
+        await expect(canvas.queryByText('defensive')).not.toBeInTheDocument()
+
+        await canvas.findByText('first name')
+        await expect(
+          canvas.queryByDisplayValue('Roger')
+        ).not.toBeInTheDocument()
+      }
+    )
+
+    await step('fills in first name for allrounder player', async () => {
+      await userEvent.type(
+        await canvas.findByTestId('text__tennis____style____firstname'),
+        'Serena'
+      )
+    })
+
+    await step(
+      'Previous values are removed when selecting defensive style again',
+      async () => {
+        await userEvent.click(await canvas.findByText('allrounder'))
+        await userEvent.click(await canvas.findByText('defensive'))
+
+        await canvas.findByText('tennis style')
+        await canvas.findByText('defensive')
+
+        await expect(canvas.queryByText('allrounder')).not.toBeInTheDocument()
+
+        await canvas.findByText('first name')
+
+        await expect(
+          canvas.queryByDisplayValue('Roger')
+        ).not.toBeInTheDocument()
+        await expect(
+          canvas.queryByDisplayValue('Serena')
+        ).not.toBeInTheDocument()
+      }
+    )
+  }
+}
+
+export const RemovesErrorOnParentChange: Story = {
+  name: 'Error is reset when parent field changes',
+  parameters: {
+    layout: 'centered',
+    chromatic: { disableSnapshot: true }
+  },
+  render: function Component(args) {
+    const formValues = {
+      'tennis.style': 'defensive'
+    }
+
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={tennisStyleFields}
+        formValues={formValues}
+        id="my-form"
+      />
+    )
+  },
+  play: async ({ canvasElement, step }) => {
+    const canvas = within(canvasElement)
+
+    await step('Renders error for required field', async () => {
+      await canvas.findByText('tennis style')
+      await canvas.findByText('defensive')
+
+      await userEvent.click(
+        await canvas.findByTestId('text__tennis____style____firstname')
+      )
+      await userEvent.click(await canvas.findByText('first name'))
+
+      await canvas.findByText('Required')
+    })
+
+    await step('Empties error when selecting a different style', async () => {
+      await userEvent.click(await canvas.findByText('defensive'))
+      await userEvent.click(await canvas.findByText('allrounder'))
+
+      await canvas.findByText('tennis style')
+      await canvas.findByText('allrounder')
+      await expect(canvas.queryByText('defensive')).not.toBeInTheDocument()
+
+      await expect(canvas.queryByText('Required')).not.toBeInTheDocument()
+    })
+  }
+}
+
+const sameIdConditionalFields = [
+  {
+    id: 'form.value',
+    type: FieldType.TEXT,
+    defaultValue: 'hello',
+    label: generateTranslationConfig('Greeting'),
+    conditionals: [
+      {
+        type: ConditionalType.SHOW,
+        conditional: not(field('form.toggle').isEqualTo(true))
+      }
+    ]
+  },
+  {
+    id: 'form.value',
+    type: FieldType.TEXT,
+    defaultValue: 'goodbye',
+    label: generateTranslationConfig('Greeting'),
+    conditionals: [
+      {
+        type: ConditionalType.SHOW,
+        conditional: field('form.toggle').isEqualTo(true)
+      }
+    ]
+  }
+] satisfies FieldConfig[]
+
+/**
+ * Test case for a bug where hidden field default values were overwriting visible field defaults
+ * due to field order in the reduce operation used to build form state.
+ */
+export const VisibleFieldDefaultIsUsed: Story = {
+  name: 'Visible field default value is applied, not hidden field default',
+  parameters: {
+    layout: 'centered',
+    chromatic: { disableSnapshot: true }
+  },
+  render: function Component(args) {
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={sameIdConditionalFields}
+        id="my-form"
+      />
+    )
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    // fieldA (default='hello') is visible; fieldB (default='goodbye') is hidden but defined last.
+    // Without the fix, fieldB's default overwrites fieldA's → input shows 'goodbye'.
+    await expect(await canvas.findByTestId('text__form____value')).toHaveValue(
+      'hello'
+    )
+  }
+}
+
+export const AlternateVariantDefaultIsUsed: Story = {
+  name: 'Alternate variant default value is applied when that variant is visible',
+  parameters: {
+    layout: 'centered',
+    chromatic: { disableSnapshot: true }
+  },
+  render: function Component(args) {
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={sameIdConditionalFields}
+        formValues={{ 'form.toggle': true }}
+        id="my-form"
+      />
+    )
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    // fieldB (default='goodbye') is visible; fieldA (default='hello') is hidden.
+    await expect(await canvas.findByTestId('text__form____value')).toHaveValue(
+      'goodbye'
+    )
+  }
+}
+
+const hiddenListenerFields = [
+  {
+    id: 'form.type',
+    type: FieldType.SELECT,
+    required: true,
+    label: generateTranslationConfig('place type'),
+    options: [
+      {
+        label: generateTranslationConfig('Private home'),
+        value: 'PRIVATE_HOME'
+      },
+      {
+        label: generateTranslationConfig('Health facility'),
+        value: 'HEALTH_FACILITY'
+      }
+    ]
+  },
+  {
+    id: 'form.address',
+    type: FieldType.TEXT,
+    label: generateTranslationConfig('address'),
+    defaultValue: 'district-123',
+    parent: field('form.type'),
+    conditionals: [
+      {
+        type: ConditionalType.SHOW,
+        conditional: field('form.type').isEqualTo('PRIVATE_HOME')
+      }
+    ]
+  },
+  {
+    id: 'form.derivedId',
+    type: FieldType.TEXT,
+    label: generateTranslationConfig('derived id'),
+    parent: field('form.type'),
+    value: field('form.address')
+  }
+] satisfies FieldConfig[]
+
+/**
+ * Regression test for the bug where changing a parent field to a value that hides a listener
+ * field would cause the listener field's defaultValue to be applied to the hidden field,
+ * which would then propagate to aggregator fields via their `value` reference.
+ *
+ * Fix: hidden listener fields are cleared to `null` instead of having `defaultValue` applied.
+ */
+export const HiddenListenerDefaultNotPropagated: Story = {
+  name: 'Parent change clears hidden listener field instead of applying its default value',
+  parameters: {
+    layout: 'centered',
+    chromatic: { disableSnapshot: true }
+  },
+  render: function Component(args) {
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={hiddenListenerFields}
+        formValues={{ 'form.type': 'PRIVATE_HOME' }}
+        id="my-form"
+      />
+    )
+  },
+  play: async ({ canvasElement, step }) => {
+    const canvas = within(canvasElement)
+
+    await step(
+      'Renders with address field visible and its default value applied',
+      async () => {
+        await expect(
+          await canvas.findByTestId('text__form____address')
+        ).toHaveValue('district-123')
+      }
+    )
+
+    await step(
+      'Changes type to Health facility, hiding the address field',
+      async () => {
+        await userEvent.click(await canvas.findByText('Private home'))
+        await userEvent.click(await canvas.findByText('Health facility'))
+      }
+    )
+
+    await step(
+      'Address field is hidden and derived id is cleared — not the hidden default',
+      async () => {
+        await expect(canvas.queryByText('address')).not.toBeInTheDocument()
+        await expect(canvas.getByTestId('text__form____derivedId')).toHaveValue(
+          ''
+        )
+      }
+    )
+  }
+}
+
+// Fields modelling the informant.relation → idType → nid pattern from issue #12638.
+// person.nid is a listener of person.relation (reset on parent change) and is
+// conditionally shown only when idType == NATIONAL_ID.
+// person.notes is a bystander: it hides when relation == FATHER but is NOT a listener,
+// so it should still be cached and restored by the hidden-value cache.
+const listenerHiddenCacheFields = [
+  {
+    id: 'person.relation',
+    type: FieldType.SELECT,
+    required: true,
+    label: generateTranslationConfig('Relation'),
+    options: [
+      { label: generateTranslationConfig('Mother'), value: 'MOTHER' },
+      { label: generateTranslationConfig('Father'), value: 'FATHER' }
+    ]
+  },
+  {
+    id: 'person.idType',
+    type: FieldType.SELECT,
+    required: true,
+    label: generateTranslationConfig('Form of ID'),
+    parent: field('person.relation'),
+    options: [
+      { label: generateTranslationConfig('National ID'), value: 'NATIONAL_ID' },
+      { label: generateTranslationConfig('Passport'), value: 'PASSPORT' }
+    ]
+  },
+  {
+    id: 'person.nid',
+    type: FieldType.TEXT,
+    label: generateTranslationConfig('National ID no.'),
+    parent: field('person.relation'),
+    conditionals: [
+      {
+        type: ConditionalType.SHOW,
+        conditional: field('person.idType').isEqualTo('NATIONAL_ID')
+      }
+    ]
+  },
+  {
+    id: 'person.notes',
+    type: FieldType.TEXT,
+    label: generateTranslationConfig('Notes'),
+    conditionals: [
+      {
+        type: ConditionalType.SHOW,
+        conditional: field('person.relation').isEqualTo('MOTHER')
+      }
+    ]
+  }
+] satisfies FieldConfig[]
+
+/**
+ * Regression test for issue #12638.
+ * When a parent field changes, its listener fields are reset and must NOT be
+ * restored from the hidden-value cache when they become visible again.
+ * Bystander fields that merely hide conditionally (but are not listeners) must
+ * still be cached and restored as normal.
+ */
+export const ListenerFieldNotRestoredFromCacheAfterParentReset: Story = {
+  parameters: {
+    layout: 'centered',
+    chromatic: { disableSnapshot: true }
+  },
+  render: function Component(args) {
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={listenerHiddenCacheFields}
+        formValues={{
+          'person.relation': 'MOTHER',
+          'person.idType': 'NATIONAL_ID',
+          'person.nid': '12345678',
+          'person.notes': 'some note'
+        }}
+        id="my-form"
+      />
+    )
+  },
+  play: async ({ canvasElement, step }) => {
+    const canvas = within(canvasElement)
+
+    await step('Renders with initial values', async () => {
+      await expect(
+        await canvas.findByTestId('text__person____nid')
+      ).toHaveValue('12345678')
+      await expect(
+        await canvas.findByTestId('text__person____notes')
+      ).toHaveValue('some note')
+    })
+
+    await step(
+      'Change relation to Father — resets listeners, hides nid and notes',
+      async () => {
+        await userEvent.click(await canvas.findByText('Mother'))
+        await userEvent.click(await canvas.findByText('Father'))
+      }
+    )
+
+    await step('Re-select National ID as Form of ID', async () => {
+      await userEvent.click(
+        await canvas.findByTestId('select__person____idType')
+      )
+      await userEvent.click(await canvas.findByText('National ID'))
+    })
+
+    await step('NID field is empty — not restored from cache', async () => {
+      await expect(
+        await canvas.findByTestId('text__person____nid')
+      ).toHaveValue('')
+    })
+
+    await step(
+      'Change relation back to Mother — notes should restore',
+      async () => {
+        await userEvent.click(await canvas.findByText('Father'))
+        await userEvent.click(await canvas.findByText('Mother'))
+      }
+    )
+
+    await step(
+      'Notes field restores cached value — bystander cache is intact',
+      async () => {
+        await expect(
+          await canvas.findByTestId('text__person____notes')
+        ).toHaveValue('some note')
+      }
+    )
+  }
+}
+
+const nixConditionalFields = [
+  {
+    id: 'form.verified',
+    type: FieldType.CHECKBOX,
+    required: false,
+    defaultValue: false,
+    label: generateTranslationConfig('Verified')
+  },
+  {
+    id: 'form.nid',
+    type: FieldType.TEXT,
+    label: generateTranslationConfig('NID'),
+    conditionals: [
+      {
+        type: ConditionalType.SHOW,
+        conditional: not(field('form.verified').isEqualTo(true))
+      }
+    ]
+  }
+] satisfies FieldConfig[]
+
+// EventConfig with nixConditionalFields in declaration so omitHiddenPaginatedFields
+// can correctly evaluate form.nid / form.verified visibility.
+const nixEventConfig: EventConfig = {
+  ...tennisClubMembershipEvent,
+  declaration: {
+    ...tennisClubMembershipEvent.declaration,
+    pages: [
+      {
+        id: 'nid-test-page',
+        title: generateTranslationConfig('NID page'),
+        fields: nixConditionalFields,
+        requireCompletionToContinue: false,
+        type: 'FORM' as const
+      }
+    ]
+  }
+}
+
+const BASE_DECL_EVENT_ID = 'a1b2c3d4-e5f6-7890-abcd-ef0123456789' as UUID
+
+const mockEventWithNid: EventDocument = {
+  type: tennisClubMembershipEvent.id,
+  id: BASE_DECL_EVENT_ID,
+  trackingId: 'NIDTEST',
+  createdAt: '2025-01-01T00:00:00.000Z',
+  updatedAt: '2025-01-01T00:00:01.000Z',
+  actions: [
+    {
+      id: '00000000-0000-0000-0000-aaaaaaaaaaaa' as UUID,
+      type: 'CREATE' as const,
+      status: ActionStatus.Accepted,
+      createdAt: '2025-01-01T00:00:00.000Z',
+      createdByUserType: 'user',
+      createdBy: '00000000-0000-0000-0000-000000000001' as UUID,
+      createdByRole: 'LOCAL_REGISTRAR',
+      createdAtLocation: '00000000-0000-0000-0000-000000000002' as UUID,
+      declaration: {},
+      transactionId: 'txn-nid-create-0000001'
+    },
+    {
+      id: '00000000-0000-0000-0000-bbbbbbbbbbbb' as UUID,
+      type: 'DECLARE' as const,
+      status: ActionStatus.Accepted,
+      createdAt: '2025-01-01T00:00:01.000Z',
+      createdByUserType: 'user',
+      createdBy: '00000000-0000-0000-0000-000000000001' as UUID,
+      createdByRole: 'LOCAL_REGISTRAR',
+      createdAtLocation: '00000000-0000-0000-0000-000000000002' as UUID,
+      declaration: { 'form.nid': '12345' },
+      transactionId: 'txn-nid-declare-0000002'
+    }
+  ]
+}
+
+const onFormChangeSpy = fn<(values: EventState) => void>()
+
+/**
+ * Regression test for the bug where hidden fields were not set to null after an OAuth
+ * redirect (e-Signet/MOSIP). After the redirect, Zustand (ocrvsFullForm) is wiped, so
+ * applyVisibilityTransitions found no previous field values and never detected
+ * visible→hidden transitions. The fix reads committed server state (baseDeclaration) from
+ * the TanStack Query cache as the reference point.
+ */
+export const NullsHiddenFieldUsingServerState: Story = {
+  parameters: {
+    layout: 'centered',
+    chromatic: { disableSnapshot: true },
+    offline: {
+      events: [mockEventWithNid]
+    },
+    reactRouter: {
+      router: {
+        path: '/event/:eventId',
+        element: (
+          <StyledFormFieldGenerator
+            eventConfig={nixEventConfig}
+            fields={nixConditionalFields}
+            formValues={{}}
+            id="nid-oauth-form"
+            validatorContext={getTestValidatorContext()}
+            onFormChange={onFormChangeSpy}
+          />
+        )
+      },
+      initialPath: `/event/${BASE_DECL_EVENT_ID}`
+    }
+  },
+  play: async ({ canvasElement, step }) => {
+    const canvas = within(canvasElement)
+
+    await step(
+      'NID field is visible and empty (formValues is {} simulating post-OAuth)',
+      async () => {
+        await expect(
+          await canvas.findByTestId('text__form____nid')
+        ).toHaveValue('')
+      }
+    )
+
+    await step(
+      'Checking Verified hides NID and sends null for it via onFormChange',
+      async () => {
+        await fireEvent.click(await canvas.findByText('Verified'))
+
+        await expect(
+          canvas.queryByTestId('text__form____nid')
+        ).not.toBeInTheDocument()
+
+        await expect(onFormChangeSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ 'form.nid': null })
+        )
+      }
+    )
+  }
+}
+
+export const CustomRequiredValidationMessage: Story = {
+  name: 'Custom required validation message',
+  parameters: {
+    layout: 'centered'
+  },
+  render: function Component(args) {
+    const formRef = useRef<FormFieldGeneratorHandle>(null)
+    return (
+      <FormWizard
+        currentPage={0}
+        pageTitle="Tennis form"
+        onNextPage={() => formRef.current?.submit()}
+        onSubmit={noop}
+      >
+        <StyledFormFieldGenerator
+          {...args}
+          ref={formRef}
+          fields={tennisStyleFields.map((f) => {
+            const { parent, ...rest } = f
+            return {
+              ...rest,
+              required: {
+                message: generateTranslationConfig(
+                  `Please fill up ${f.label.defaultMessage} field`
+                )
+              }
+            } satisfies FieldConfig
+          })}
+          id="my-form"
+        />
+      </FormWizard>
+    )
+  },
+  play: async ({ canvasElement, step }) => {
+    const canvas = within(canvasElement)
+
+    await step(
+      'Renders error for required field with custom required validation message',
+      async () => {
+        await userEvent.click(
+          await canvas.findByRole('button', { name: 'Continue' })
+        )
+
+        await canvas.findByText('Please fill up tennis style field')
+        await canvas.findByText('Please fill up first name field')
+      }
+    )
+  }
+}
+
+const newfield = [
+  {
+    id: 'tennis-member.name',
+    type: FieldType.TEXT,
+    required: true,
+    label: {
+      defaultMessage: 'Name',
+      description: 'This is the label for the field',
+      id: 'field.name.label'
+    }
+  }
+] satisfies FieldConfig[]
+
+const newfieldvalue = {
+  'tennis-member.name': '               '
+} satisfies EventState
+
+export const TrimsWhitespaceOnSubmit: Story = {
+  name: 'Trims whitespace on submit',
+  parameters: {
+    layout: 'centered'
+  },
+  render: function Component(args) {
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={newfield}
+        formValues={newfieldvalue}
+        id="my-form"
+      />
+    )
+  },
+  play: async ({ canvasElement, step }) => {
+    const canvas = within(canvasElement)
+    await step(
+      'Shows validation error for input with only whitespace',
+      async () => {
+        await userEvent.click(
+          await canvas.findByTestId('text__tennis-member____name')
+        )
+        await userEvent.click(await canvas.findByText('Name'))
+        await canvas.findByText('Required')
+      }
+    )
+  }
+}
+
+// Minimal field set mimicking the MOSIP / E-Signet authenticated-informant scenario.
+// informant.http-fetch (HTTP type) holds MOSIP response data and is a listener of
+// informant.relation. informant.verified/name/dob read from http-fetch via their
+// `value` expressions and are listeners of both http-fetch and relation.
+//
+// When informant.relation changes:
+//   1. http-fetch resets (now interactive — HTTP removed from NonInteractiveFieldType)
+//   2. verified/name/dob re-evaluate resolveSyncedFieldValue → see null http-fetch → undefined
+//   3. applyVisibilityTransitions sweep converts undefined → null for fields that had prior values
+//
+// The HTTP trigger points at a field not present in this minimal set so the fetch
+// never fires automatically — the initial formValues simulate a completed MOSIP auth.
+const mosipLikeFields = [
+  {
+    id: 'informant.relation',
+    type: FieldType.SELECT,
+    label: generateTranslationConfig('Informant type'),
+    options: [
+      { label: generateTranslationConfig('Mother'), value: 'MOTHER' },
+      { label: generateTranslationConfig('Father'), value: 'FATHER' }
+    ]
+  },
+  {
+    id: 'informant.http-fetch',
+    type: FieldType.HTTP,
+    label: generateTranslationConfig('Identity fetch'),
+    parent: field('informant.relation'),
+    configuration: {
+      trigger: field('informant.query-params'),
+      url: 'http://localhost/noop',
+      method: 'GET' as const,
+      timeout: 0
+    }
+  },
+  {
+    id: 'informant.verified',
+    type: FieldType.TEXT,
+    label: generateTranslationConfig('Identity status'),
+    parent: [field('informant.http-fetch'), field('informant.relation')],
+    value: field('informant.http-fetch').get('data.verificationStatus')
+  },
+  {
+    id: 'informant.name',
+    type: FieldType.TEXT,
+    label: generateTranslationConfig('Full name'),
+    parent: [field('informant.http-fetch'), field('informant.relation')],
+    value: field('informant.http-fetch').get('data.name')
+  },
+  {
+    id: 'informant.dob',
+    type: FieldType.TEXT,
+    label: generateTranslationConfig('Date of birth'),
+    parent: [field('informant.http-fetch'), field('informant.relation')],
+    value: field('informant.http-fetch').get('data.dob')
+  }
+] satisfies FieldConfig[]
+
+const mosipEventConfig: EventConfig = {
+  ...tennisClubMembershipEvent,
+  declaration: {
+    ...tennisClubMembershipEvent.declaration,
+    pages: [
+      {
+        id: 'mosip-test-page',
+        title: generateTranslationConfig('MOSIP test page'),
+        fields: mosipLikeFields,
+        requireCompletionToContinue: false,
+        type: 'FORM' as const
+      }
+    ]
+  }
+}
+
+/**
+ * Regression test for issue #12638 (MOSIP case): changing informant type after
+ * E-Signet authentication must clear the PII fields populated from the MOSIP response,
+ * not re-apply them from stale HTTP data.
+ *
+ * The fix removes HttpField from NonInteractiveFieldType so the HTTP fetch field
+ * participates in the listener reset loop and clears when its parent changes.
+ * The visible-reset sweep in applyVisibilityTransitions then converts the resulting
+ * undefined values to null so Formik renders controlled empty inputs.
+ */
+export const MosipFieldsClearedOnInformantTypeChange: Story = {
+  name: 'MOSIP-populated fields clear when informant type changes',
+  parameters: {
+    layout: 'centered',
+    chromatic: { disableSnapshot: true }
+  },
+  render: function Component(args) {
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        eventConfig={mosipEventConfig}
+        fields={mosipLikeFields}
+        formValues={{
+          'informant.relation': 'MOTHER',
+          'informant.http-fetch': {
+            data: {
+              name: 'Mary Smith',
+              dob: '1990-01-01',
+              verificationStatus: 'authenticated'
+            }
+          },
+          'informant.verified': 'authenticated',
+          'informant.name': 'Mary Smith',
+          'informant.dob': '1990-01-01'
+        }}
+        id="mosip-form"
+      />
+    )
+  },
+  play: async ({ canvasElement, step }) => {
+    const canvas = within(canvasElement)
+
+    await step('Renders with MOSIP-authenticated initial values', async () => {
+      await expect(
+        await canvas.findByTestId('text__informant____verified')
+      ).toHaveValue('authenticated')
+      await expect(
+        await canvas.findByTestId('text__informant____name')
+      ).toHaveValue('Mary Smith')
+      await expect(
+        await canvas.findByTestId('text__informant____dob')
+      ).toHaveValue('1990-01-01')
+    })
+
+    await step(
+      'Changing informant type clears MOSIP-populated fields',
+      async () => {
+        await userEvent.click(await canvas.findByText('Mother'))
+        await userEvent.click(await canvas.findByText('Father'))
+
+        await expect(
+          await canvas.findByTestId('text__informant____verified')
+        ).toHaveValue('')
+        await expect(
+          await canvas.findByTestId('text__informant____name')
+        ).toHaveValue('')
+        await expect(
+          await canvas.findByTestId('text__informant____dob')
+        ).toHaveValue('')
+      }
+    )
+  }
+}

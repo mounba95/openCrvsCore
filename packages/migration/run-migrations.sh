@@ -1,0 +1,82 @@
+#!/bin/bash
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# OpenCRVS is also distributed under the terms of the Civil Registration
+# & Healthcare Disclaimer located at http://opencrvs.org/license.
+#
+# Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+
+set -e # fail if any of the commands fails
+
+: "${EVENTS_POSTGRES_URL:=postgres://events_migrator:migrator_password@localhost:5432/events}"
+
+SCRIPT_PATH=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+
+export NODE_OPTIONS=--dns-result-order=ipv4first
+
+run_pg_migrations() {
+  MIGRATIONS_PATH="$1"
+  local database_url="$2"
+  local schema="$3"
+  local migrations_table="${4:-pgmigrations}"
+
+  BACKUP_PATH="$MIGRATIONS_PATH/backup"
+
+  mkdir -p "$BACKUP_PATH"
+
+  # Only SQL files need envsubst — JS migration files use process.env directly
+  # and running envsubst on them would corrupt JS template literals (${...} syntax)
+  SQL_FILES_TO_MIGRATE=$(ls -p "$MIGRATIONS_PATH" | grep -v / | grep '\.sql$' || true)
+
+  # --- define cleanup function ---
+  # As this function is being called via 'trap', the variables
+  # used inside need to be global
+  restore_backups() {
+    echo "Restoring original migration files in $MIGRATIONS_PATH"
+    for migration_file in $SQL_FILES_TO_MIGRATE; do
+      if [ -f "$BACKUP_PATH/$migration_file" ]; then
+        mv "$BACKUP_PATH/$migration_file" "$MIGRATIONS_PATH/$migration_file"
+      fi
+    done
+    rm -rf "$BACKUP_PATH"
+  }
+
+  # Always run restore_backups when the function exits
+  trap restore_backups EXIT
+
+  # --- Backup originals ---
+  for migration_file in $SQL_FILES_TO_MIGRATE; do
+    echo "Creating backup for $MIGRATIONS_PATH/$migration_file"
+    cp "$MIGRATIONS_PATH/$migration_file" "$BACKUP_PATH/$migration_file"
+  done
+
+  # --- envsubst ---
+  for migration_file in $SQL_FILES_TO_MIGRATE; do
+    echo "Updating environment variables in $MIGRATIONS_PATH/$migration_file"
+    envsubst <"$MIGRATIONS_PATH/$migration_file" >"$MIGRATIONS_PATH/$migration_file.tmp"
+    mv "$MIGRATIONS_PATH/$migration_file.tmp" "$MIGRATIONS_PATH/$migration_file"
+  done
+
+  # --- Run migrations ---
+  echo "Running migrations for schema '$schema' in $MIGRATIONS_PATH"
+  DATABASE_URL="$database_url" \
+    yarn --cwd "$SCRIPT_PATH" node-pg-migrate up \
+    --schema="$schema" \
+    --migrations-dir="$MIGRATIONS_PATH" \
+    --migrations-table="$migrations_table"
+
+  # If migration succeeds, remove trap before exit so cleanup still happens normally
+  trap - EXIT
+  restore_backups
+}
+
+# needed for events migrations
+export EVENTS_DB_USER="${EVENTS_DB_USER:-events_app}"
+
+# Run events migrations
+run_pg_migrations \
+  "$SCRIPT_PATH/src/migrations/events" \
+  "$EVENTS_POSTGRES_URL" \
+  "app"

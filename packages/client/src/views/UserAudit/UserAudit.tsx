@@ -1,0 +1,342 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import { AvatarSmall } from '@client/components/Avatar'
+import { GenericErrorToast } from '@client/components/GenericErrorToast'
+import { usePermissions } from '@client/hooks/useAuthorization'
+import { buttonMessages } from '@client/i18n/messages'
+import { messages as sysMessages } from '@client/i18n/messages/views/sysAdmin'
+import { messages as userFormMessages } from '@client/i18n/messages/views/userForm'
+import { messages as userSetupMessages } from '@client/i18n/messages/views/userSetup'
+import * as routes from '@client/navigation/routes'
+import { getScope, getUserDetails } from '@client/profile/profileSelectors'
+import { IStoreState } from '@client/store'
+import { useLocations } from '@client/v2-events/hooks/useLocations'
+import { formatUserRole } from '@client/v2-events/hooks/useRoles'
+import { useUsers } from '@client/v2-events/hooks/useUsers'
+import { ROUTES } from '@client/v2-events/routes'
+import { useEventFormData } from '@client/v2-events/features/events/useEventFormData'
+import { useUserFormState } from '@client/views/SysAdmin/Team/user/userEditor/useUserFormState'
+import {
+  PasswordFields,
+  isPasswordValid
+} from '@client/views/SysAdmin/Team/user/userEditor/PasswordFields'
+import { getUsersFullName } from '@client/v2-events/utils'
+import { Status } from '@client/views/SysAdmin/Team/user/UserList'
+import { User, UUID } from '@opencrvs/commons/client'
+import { Link } from '@opencrvs/components/lib'
+import { Button } from '@opencrvs/components/lib/Button'
+import { Content, ContentSize } from '@opencrvs/components/lib/Content'
+import { Icon } from '@opencrvs/components/lib/Icon'
+import { Loader } from '@opencrvs/components/lib/Loader'
+import { Dialog } from '@opencrvs/components/lib/Dialog'
+import { Summary } from '@opencrvs/components/lib/Summary'
+import { Toast } from '@opencrvs/components/lib/Toast'
+import { ToggleMenu } from '@opencrvs/components/lib/ToggleMenu'
+import { stringify } from 'qs'
+import React, { useState } from 'react'
+import { useIntl } from 'react-intl'
+import { useSelector } from 'react-redux'
+import { useNavigate, useParams } from 'react-router-dom'
+import styled from 'styled-components'
+import { UserAuditHistory } from './UserAuditHistory'
+import { UserActivationModal } from '../SysAdmin/Team/user/UserActivationModal'
+
+const UserAvatar = styled(AvatarSmall)`
+  @media (max-width: ${({ theme }) => theme.grid.breakpoints.md}px) {
+    display: none;
+  }
+`
+
+export const UserAudit = () => {
+  const intl = useIntl()
+  const navigate = useNavigate()
+  const { userId } = useParams<{ userId: UUID }>()
+
+  const [modalVisible, setModalVisible] = useState(false)
+  const scope = useSelector((store: IStoreState) => getScope(store))
+  const userDetails = useSelector((store: IStoreState) => getUserDetails(store))
+  const [showResetPasswordSuccess, setShowResetPasswordSuccess] =
+    useState(false)
+  const [showResetPasswordError, setShowResetPasswordError] = useState(false)
+  const [toggleResetPassword, setToggleResetPassword] = useState(false)
+  const [resetPasswordValue, setResetPasswordValue] = useState({
+    password: '',
+    confirmPassword: ''
+  })
+  const [resetPasswordTouched, setResetPasswordTouched] = useState(false)
+  const [showActivationToggleSuccess, setShowActivationToggleSuccess] =
+    useState(false)
+  const [showActivationToggleError, setShowActivationToggleError] =
+    useState(false)
+
+  const { getUser, sendResetPasswordInvite } = useUsers()
+  const { isFetching: loading, error, data } = getUser.useQuery(userId!)
+  const { getLocations } = useLocations()
+  const locations = getLocations.useSuspenseQuery()
+
+  const user = data as User | undefined
+  const userRole = user && formatUserRole(user.role, intl)
+  const { canEditUser } = usePermissions()
+  const toggleUserActivationModal = () => {
+    setModalVisible(!modalVisible)
+  }
+
+  const toggleUserResetPasswordModal = () => {
+    setResetPasswordValue({ password: '', confirmPassword: '' })
+    setResetPasswordTouched(false)
+    setToggleResetPassword((prevValue) => !prevValue)
+  }
+
+  const resetPassword = async (userId: UUID, password: string) => {
+    try {
+      await sendResetPasswordInvite.mutateAsync({ userId, password })
+      setShowResetPasswordSuccess(true)
+    } catch {
+      setShowResetPasswordError(true)
+    }
+  }
+
+  const getMenuItems = (userId: UUID, status: string) => {
+    const menuItems: { label: string; handler: () => void }[] = [
+      {
+        label: intl.formatMessage(sysMessages.editUserDetailsTitle),
+        handler: () => {
+          useUserFormState.getState().clear()
+          useEventFormData.getState().clear()
+          navigate(
+            ROUTES.V2.SETTINGS.USER.REVIEW.buildPath(
+              {
+                userId
+              },
+              { from: 'user.audit' }
+            )
+          )
+        }
+      }
+    ]
+
+    if (status === 'pending' || status === 'active') {
+      menuItems.push({
+        label: intl.formatMessage(sysMessages.resetUserPasswordTitle),
+        handler: () => {
+          toggleUserResetPasswordModal()
+        }
+      })
+    }
+
+    if (status === 'active') {
+      menuItems.push({
+        label: intl.formatMessage(sysMessages.deactivate),
+        handler: () => toggleUserActivationModal()
+      })
+    }
+
+    if (status === 'deactivated') {
+      menuItems.push({
+        label: intl.formatMessage(sysMessages.reactivate),
+        handler: () => toggleUserActivationModal()
+      })
+    }
+
+    return menuItems
+  }
+
+  const userName = user ? getUsersFullName(user.name) : ''
+
+  return (
+    <>
+      {loading ? (
+        <Loader id="user_loader" marginPercent={35} />
+      ) : error || !user ? (
+        <GenericErrorToast />
+      ) : (
+        <Content
+          title={userName}
+          icon={() => <UserAvatar name={userName} avatar={user.avatar} />}
+          showTitleOnMobile
+          topActionButtons={
+            userDetails && scope
+              ? [
+                  <Status
+                    key="top-action-status"
+                    status={user.status || 'pending'}
+                  />,
+                  <ToggleMenu
+                    id={`sub-page-header-munu-button`}
+                    key="top-action-toggle-menu"
+                    toggleButton={
+                      <Icon
+                        name="DotsThreeVertical"
+                        color="primary"
+                        size="large"
+                      />
+                    }
+                    menuItems={getMenuItems(user.id, user.status as string)}
+                    hide={!canEditUser(user)}
+                  />
+                ]
+              : []
+          }
+          size={ContentSize.LARGE}
+        >
+          <>
+            <Summary>
+              <Summary.Row
+                data-testid="office-link"
+                label={intl.formatMessage(userSetupMessages.assignedOffice)}
+                value={
+                  <Link
+                    id="office-link"
+                    onClick={() =>
+                      navigate({
+                        pathname: routes.TEAM_USER_LIST,
+                        search: stringify({
+                          locationId: user.primaryOfficeId
+                        })
+                      })
+                    }
+                  >
+                    {locations.get(user.primaryOfficeId)?.name ||
+                      user.primaryOfficeId}
+                  </Link>
+                }
+              />
+              <Summary.Row
+                label={intl.formatMessage(userFormMessages.labelRole)}
+                value={userRole}
+              />
+              <Summary.Row
+                label={intl.formatMessage(userFormMessages.userDevice)}
+                value={user.device === null ? 'N/A' : user.device}
+              />
+            </Summary>
+
+            {user.id && (
+              <UserAuditHistory userId={user.id} userName={userName} />
+            )}
+          </>
+          {modalVisible && user.id && (
+            <UserActivationModal
+              user={user}
+              onClose={() => toggleUserActivationModal()}
+              onSuccess={() => {
+                toggleUserActivationModal()
+                setShowActivationToggleSuccess(true)
+              }}
+              onError={() => {
+                toggleUserActivationModal()
+                setShowActivationToggleError(true)
+              }}
+            />
+          )}
+          <Dialog
+            id="user-reset-password-modal"
+            isOpen={toggleResetPassword}
+            onClose={() => toggleUserResetPasswordModal()}
+            title={intl.formatMessage(sysMessages.resetUserPasswordModalTitle)}
+            actions={[
+              <Button
+                type="tertiary"
+                id="reset-password-cancel"
+                key="reset-password-cancel"
+                onClick={() => toggleUserResetPasswordModal()}
+              >
+                {intl.formatMessage(buttonMessages.cancel)}
+              </Button>,
+              <Button
+                type="primary"
+                id="reset-password-send"
+                key="reset-password-send"
+                onClick={() => {
+                  setResetPasswordTouched(true)
+                  if (
+                    !isPasswordValid(
+                      resetPasswordValue.password,
+                      resetPasswordValue.confirmPassword
+                    )
+                  ) {
+                    return
+                  }
+                  if (toggleResetPassword && userId) {
+                    resetPassword(userId, resetPasswordValue.password)
+                  }
+                  toggleUserResetPasswordModal()
+                }}
+              >
+                {intl.formatMessage(buttonMessages.confirm)}
+              </Button>
+            ]}
+          >
+            <PasswordFields
+              confirmPassword={resetPasswordValue.confirmPassword}
+              password={resetPasswordValue.password}
+              touched={resetPasswordTouched}
+              onChange={setResetPasswordValue}
+            />
+          </Dialog>
+          {showResetPasswordSuccess && (
+            <Toast
+              id="reset_password_success"
+              type="success"
+              onClose={() => {
+                setShowResetPasswordSuccess(false)
+              }}
+            >
+              {intl.formatMessage(sysMessages.resetPasswordSuccess, {
+                username: userName
+              })}
+            </Toast>
+          )}
+          {showResetPasswordError && (
+            <Toast
+              id="reset_password_error"
+              type="warning"
+              onClose={() => setShowResetPasswordError(false)}
+            >
+              {intl.formatMessage(sysMessages.resetPasswordError)}
+            </Toast>
+          )}
+          {showActivationToggleSuccess && user && (
+            <Toast
+              id="activation_toggle_success"
+              type="success"
+              onClose={() => setShowActivationToggleSuccess(false)}
+            >
+              {intl.formatMessage(sysMessages.toggleActivateStatusSuccess, {
+                name: getUsersFullName(user.name),
+                status:
+                  user?.status === 'active'
+                    ? intl.formatMessage(sysMessages.active)
+                    : intl.formatMessage(sysMessages.deactivated)
+              })}
+            </Toast>
+          )}
+          {showActivationToggleError && user && (
+            <Toast
+              id="activation_toggle_error"
+              type="warning"
+              onClose={() => setShowActivationToggleError(false)}
+            >
+              {intl.formatMessage(sysMessages.toggleActivateStatusError, {
+                name: getUsersFullName(user.name),
+                status:
+                  user?.status === 'active'
+                    ? intl.formatMessage(sysMessages.deactivated)
+                    : intl.formatMessage(sysMessages.active)
+              })}
+            </Toast>
+          )}
+        </Content>
+      )}
+    </>
+  )
+}

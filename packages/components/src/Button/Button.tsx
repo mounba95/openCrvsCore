@@ -1,0 +1,128 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import React from 'react'
+import styled from 'styled-components'
+import { Spinner } from '../Spinner'
+import * as styles from './Button.styles'
+
+type ButtonSize = 'small' | 'medium' | 'large'
+export type ButtonType =
+  | 'primary'
+  | 'secondary'
+  | 'tertiary'
+  | 'positive'
+  | 'negative'
+  | 'secondaryNegative'
+  | 'icon'
+  | 'iconPrimary'
+
+type ButtonModifier = 'disabled' | 'loading'
+
+interface ButtonCustomization {
+  /** Size of the button */
+  size?: ButtonSize
+  /** Size of the button */
+  fullWidth?: boolean
+  /** Button type */
+  type: ButtonType
+}
+
+interface AnchorButtonProps
+  extends ButtonCustomization,
+    React.HTMLAttributes<HTMLAnchorElement> {
+  element: 'a'
+  href: string
+}
+
+interface NativeButtonProps
+  extends ButtonCustomization,
+    React.HTMLAttributes<HTMLButtonElement> {
+  element?: 'button'
+}
+export type ButtonProps = (AnchorButtonProps | NativeButtonProps) & {
+  [modifier in ButtonModifier]?: boolean
+}
+
+type StyledButtonProps = Omit<ButtonProps, 'type'> & {
+  variant: ButtonType
+  /**
+   * Injected by `DropdownMenu.Trigger` (via `asChild`) so the button can act as
+   * the CSS anchor the dropdown content positions itself against.
+   */
+  dropdownName?: string
+}
+const StyledButton = styled.button.withConfig({
+  shouldForwardProp: (prop, defaultValidatorFn) =>
+    // https://styled-components.com/docs/api#shouldforwardprop
+    // `popovertarget` is a native HTML attribute that styled-components' default
+    // validator does not recognise; forward it explicitly so the button can act
+    // as a `DropdownMenu.Trigger` (which wires it up via the Popover API).
+    ['popovertarget'].includes(prop) ||
+    // Leave some props unpassed to DOM
+    (!['loading'].includes(prop) && defaultValidatorFn(prop))
+})<StyledButtonProps>`
+  ${styles.base}
+
+  ${(props) =>
+    props.dropdownName &&
+    `anchor-name: --Dropdown-Anchor-${props.dropdownName};`}
+
+  ${(props) => props.size === 'small' && styles.small(props)}
+  ${(props) => props.size === 'medium' && styles.medium}
+  ${(props) => props.size === 'large' && styles.large}
+
+  ${(props) => props.variant === 'primary' && styles.primary(props)}
+  ${(props) => props.variant === 'secondary' && styles.secondary}
+  ${(props) =>
+    props.variant === 'secondaryNegative' && styles.secondaryNegative}
+
+  ${(props) => props.variant === 'tertiary' && styles.tertiary}
+  ${(props) => props.variant === 'positive' && styles.positive}
+  ${(props) => props.variant === 'negative' && styles.negative}
+  ${(props) => props.variant === 'icon' && styles.icon}
+  ${(props) => props.variant === 'iconPrimary' && styles.iconPrimary}
+
+  ${(props) => props.loading && styles.loading}
+  ${(props) => props.disabled && styles.disabled}
+`
+
+export const Button = ({
+  size = 'medium',
+  fullWidth,
+  element = 'button',
+  type,
+  loading,
+  children,
+  ...props
+}: ButtonProps) => {
+  return (
+    <StyledButton
+      size={size}
+      fullWidth={fullWidth}
+      variant={type}
+      loading={loading}
+      as={element}
+      data-testid={props.id}
+      {...props}
+    >
+      {loading && (
+        <Spinner
+          id="button-loading"
+          size={24}
+          baseColor="currentColor"
+          style={{ marginRight: '-6px' }}
+        />
+      )}
+      {children}
+    </StyledButton>
+  )
+}

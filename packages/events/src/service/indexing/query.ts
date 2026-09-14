@@ -1,0 +1,567 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import { type estypes } from '@elastic/elasticsearch'
+import {
+  EventConfig,
+  FieldType,
+  getAllUniqueFields,
+  FieldConfig,
+  QueryExpression,
+  QueryType,
+  DateCondition,
+  QueryInputType,
+  timePeriodToDateRange,
+  AnyOfStatus,
+  ExactStatus,
+  ContainsFlags,
+  NumericRange
+} from '@opencrvs/commons/events'
+import { z } from 'zod/v4'
+import { getOrThrow, ResolvedRecordScopeV2 } from '@opencrvs/commons'
+import {
+  encodeFieldId,
+  generateQueryForAddressField,
+  nameQueryKey
+} from './utils'
+
+/** Convert API date clause format to elastic syntax */
+function dateClauseToElasticQuery(
+  clause: DateCondition,
+  propertyName: string
+): estypes.QueryDslQueryContainer {
+  if (clause.type === 'exact') {
+    return { term: { [propertyName]: clause.term } }
+  } else if (clause.type === 'range') {
+    // @todo supply timezone from here
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { type, ...rest } = clause
+    return {
+      range: {
+        [propertyName]: {
+          time_zone: 'Asia/Dhaka',
+          ...rest
+        }
+      }
+    }
+  } else {
+    const { startDate, endDate } = timePeriodToDateRange(clause.term)
+    return {
+      range: {
+        [propertyName]: {
+          gte: startDate,
+          lte: endDate
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Convertit une clause `numericRange` en requête ES `script` (Painless).
+ *
+ * `propertyName` (ex. `legalStatuses.REGISTERED.registrationNumber`) est un
+ * champ `keyword` : les numéros d'acte sont attribués séquentiellement SANS
+ * zéros de remplissage (voir `generateSequentialActNumber` côté
+ * countryconfig), donc une requête `range` native ferait une comparaison
+ * lexicographique fausse ("100" < "20"). On caste la valeur en `long` côté
+ * script plutôt que de changer le mapping du champ, ce qui éviterait une
+ * migration/réindexation des actes déjà enregistrés.
+ *
+ * Le script ne doit jamais lever d'exception : un document sans ce champ
+ * (événement non encore enregistré) ou avec une valeur non numérique doit
+ * simplement ne pas matcher.
+ *
+ * NB : la contrainte "au moins gte ou lte" n'est pas portée par le schéma
+ * `NumericRange` lui-même (un `.refine()` dessus casse le typage
+ * discriminé de l'union `Exact | NumericRange` utilisé plus bas dans ce
+ * fichier), donc on la vérifie ici pour ne jamais générer un script qui
+ * matcherait tous les documents par erreur.
+ */
+function numericRangeClauseToElasticQuery(
+  clause: NumericRange,
+  propertyName: string
+): estypes.QueryDslQueryContainer {
+  const { gte, lte } = clause
+
+  if (gte === undefined && lte === undefined) {
+    throw new Error(
+      `numericRange clause for "${propertyName}" must specify at least one of gte or lte`
+    )
+  }
+
+  const source = `
+    if (doc['${propertyName}'].size() == 0) { return false; }
+    def raw = doc['${propertyName}'].value;
+    if (raw == null || raw.isEmpty()) { return false; }
+    long value;
+    try {
+      value = Long.parseLong(raw);
+    } catch (NumberFormatException e) {
+      return false;
+    }
+    ${gte !== undefined ? "if (value < params.gte) { return false; }" : ''}
+    ${lte !== undefined ? "if (value > params.lte) { return false; }" : ''}
+    return true;
+  `
+
+  return {
+    script: {
+      script: {
+        lang: 'painless',
+        source,
+        params: {
+          ...(gte !== undefined ? { gte } : {}),
+          ...(lte !== undefined ? { lte } : {})
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Generates an Elasticsearch query to search within `document.declaration`
+ * using the provided search payload.
+ */
+function generateQuery(
+  event: QueryInputType,
+  eventConfigs: EventConfig[]
+): estypes.QueryDslQueryContainer {
+  const allEventFields = eventConfigs.reduce<FieldConfig[]>(
+    (acc, eventConfig) => {
+      const fields = getAllUniqueFields(eventConfig)
+      return acc.concat(fields)
+    },
+    []
+  )
+
+  const must = Object.entries(event).map(([fieldId, search]) => {
+    const esFieldName = `declaration.${encodeFieldId(fieldId)}`
+    const field = getOrThrow(
+      allEventFields.find((f) => f.id === fieldId),
+      `Tried to search with a field id ${fieldId} but it is not found in event configuration`
+    )
+
+    if (field.type === FieldType.ADDRESS) {
+      return generateQueryForAddressField(fieldId, search)
+    }
+
+    if (field.type === FieldType.NAME) {
+      if (search.type === 'fuzzy') {
+        return {
+          match: {
+            [nameQueryKey(esFieldName)]: {
+              query: search.term,
+              fuzziness: 'AUTO'
+            }
+          }
+        }
+      }
+      return {
+        match: {
+          [nameQueryKey(esFieldName)]: search.term
+        }
+      }
+    }
+
+    if (search.type === 'exact') {
+      return {
+        match: {
+          [esFieldName]: search.term
+        }
+      }
+    }
+
+    if (search.type === 'fuzzy') {
+      return {
+        match: {
+          [esFieldName]: {
+            query: search.term,
+            fuzziness: 'AUTO'
+          }
+        }
+      }
+    }
+
+    if (search.type === 'anyOf') {
+      return {
+        terms: {
+          [esFieldName]: search.terms
+        }
+      }
+    }
+
+    if (search.type === 'range') {
+      return {
+        range: {
+          [esFieldName]: {
+            gte: search.gte,
+            lte: search.lte
+          }
+        }
+      }
+    }
+
+    throw new Error(`Unsupported query type: ${search.type}`)
+  })
+
+  return {
+    bool: { must, should: undefined }
+  } satisfies estypes.QueryDslQueryContainer
+}
+
+function typedKeys<T extends object>(obj: T): (keyof T)[] {
+  return Object.keys(obj) as (keyof T)[]
+}
+
+function buildClause(clause: QueryExpression, eventConfigs: EventConfig[]) {
+  const must: estypes.QueryDslQueryContainer[] = []
+
+  for (const key of typedKeys(clause)) {
+    if (!clause[key]) {
+      continue
+    }
+
+    switch (key) {
+      case 'id': {
+        must.push({
+          term: { id: clause.id }
+        })
+        break
+      }
+
+      case 'eventType': {
+        const value = clause[key]
+        must.push({ term: { type: value } })
+        break
+      }
+
+      case 'status': {
+        const value = clause[key]
+        if (value.type === 'anyOf') {
+          must.push({ terms: { status: value.terms } })
+        } else {
+          must.push({ term: { status: value.term } })
+        }
+        break
+      }
+      case 'trackingId':
+      case 'assignedTo':
+      case 'createdBy':
+      case 'updatedBy':
+      case 'updatedByUserRole':
+      case 'createdByUserType': {
+        const value = clause[key]
+        must.push({ term: { [key]: value.term } })
+        break
+      }
+
+      // Séparé du groupe ci-dessus : ce champ accepte aussi `numericRange`
+      // (voir NumericRange dans commons/events/EventIndex.ts), en plus de
+      // `exact`, ce qu'aucun autre champ de ce groupe ne fait.
+      case 'legalStatuses.REGISTERED.registrationNumber': {
+        const value = clause[key]
+        if (value.type === 'exact') {
+          must.push({ term: { [key]: value.term } })
+        } else {
+          must.push(numericRangeClauseToElasticQuery(value, key))
+        }
+        break
+      }
+
+      case 'createdAt':
+      case 'updatedAt':
+      case 'legalStatuses.REGISTERED.acceptedAt': {
+        const value = clause[key]
+        must.push(dateClauseToElasticQuery(value, key))
+        break
+      }
+
+      case 'createdAtLocation':
+      case 'updatedAtLocation':
+      case 'legalStatuses.DECLARED.createdAtLocation':
+      case 'legalStatuses.REGISTERED.createdAtLocation': {
+        if (clause[key].type === 'exact') {
+          must.push({ term: { [key]: clause[key].term } })
+        } else {
+          must.push({ term: { [key]: clause[key].location } })
+        }
+        break
+      }
+      case 'legalStatuses.DECLARED.createdByRole':
+      case 'legalStatuses.REGISTERED.createdByRole': {
+        must.push({ terms: { [key]: clause[key].terms } })
+        break
+      }
+      case 'data': {
+        // @todo: The type for this comes out as "any"
+        const value = clause[key]
+        const dataQuery = generateQuery(value as QueryInputType, eventConfigs)
+        const innerMust = dataQuery.bool?.must
+        if (Array.isArray(innerMust)) {
+          must.push(...innerMust)
+        } else if (innerMust) {
+          must.push(innerMust)
+        }
+        break
+      }
+
+      case 'flags': {
+        const value = clause[key]
+        if (value.anyOf) {
+          must.push({ terms: { flags: value.anyOf } })
+        }
+        if (value.noneOf) {
+          must.push({
+            bool: {
+              must_not: {
+                terms: { flags: value.noneOf }
+              },
+              should: undefined
+            }
+          })
+        }
+        if (value.allOf) {
+          must.push(...value.allOf.map((flag) => ({ term: { flags: flag } })))
+        }
+        break
+      }
+      default:
+        throw new Error(`Unsupported query field: ${key}`)
+    }
+  }
+
+  return must
+}
+
+async function buildClauseOrQuery(
+  clause: QueryExpression | QueryType,
+  eventConfigs: EventConfig[]
+): Promise<estypes.QueryDslQueryContainer> {
+  // Check if query is nested
+  if ('clauses' in clause) {
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
+    return buildElasticQueryFromSearchPayload(clause, eventConfigs)
+  } else {
+    const must = buildClause(clause, eventConfigs)
+    return {
+      bool: {
+        must,
+        should: undefined
+      }
+    }
+  }
+}
+
+export async function buildElasticQueryFromSearchPayload(
+  input: QueryType,
+  eventConfigs: EventConfig[]
+): Promise<estypes.QueryDslQueryContainer> {
+  switch (input.type) {
+    case 'and': {
+      const mustResults = await Promise.all(
+        input.clauses.map(async (clause: QueryExpression | QueryType) =>
+          buildClauseOrQuery(clause, eventConfigs)
+        )
+      )
+
+      return {
+        bool: {
+          must: mustResults,
+          // Explicitly setting `should` to `undefined` to satisfy QueryDslBoolQuery type requirements
+          // when no `should` clauses are provided.
+          should: undefined
+        }
+      }
+    }
+    case 'or': {
+      const shouldResults = await Promise.all(
+        input.clauses.map(async (clause: QueryExpression | QueryType) =>
+          buildClauseOrQuery(clause, eventConfigs)
+        )
+      )
+
+      return {
+        bool: {
+          should: shouldResults,
+          minimum_should_match: 1
+        }
+      }
+    }
+    // default fallback (shouldn't happen if input is validated correctly)
+    default:
+      return {
+        bool: { must_not: { match_all: {} }, should: undefined }
+      }
+  }
+}
+
+/**
+ * Adds jurisdiction filters to the query based on the provided scopes.
+ *
+ * @param query The original query to modify.
+ * @param scopesV2 The filters indicating which event jurisdictions to include.
+ * @returns The modified query with jurisdiction filters.
+ */
+export function withJurisdictionFilters({
+  query,
+  scopesV2
+}: {
+  query: estypes.QueryDslQueryContainer
+  scopesV2: ResolvedRecordScopeV2[]
+}): estypes.QueryDslQueryContainer {
+  const scopeQueries = scopesV2
+    .map((scope) => {
+      const must: estypes.QueryDslQueryContainer[] = []
+
+      for (const [filterProperty, value] of Object.entries(
+        scope.options ?? {}
+      )) {
+        if (!value) {
+          continue
+        }
+
+        switch (filterProperty) {
+          case 'event':
+            must.push({
+              terms: {
+                type: Array.isArray(value) ? value : [value]
+              }
+            })
+            break
+
+          case 'placeOfEvent':
+            must.push({
+              term: { placeOfEvent: value }
+            })
+            break
+
+          case 'notifiedIn':
+            must.push({
+              term: {
+                'legalStatuses.NOTIFIED.createdAtLocation': value
+              }
+            })
+            break
+
+          case 'notifiedBy':
+            must.push({
+              term: { 'legalStatuses.NOTIFIED.createdBy': value }
+            })
+            break
+
+          case 'declaredIn':
+            must.push({
+              term: {
+                'legalStatuses.DECLARED.createdAtLocation': value
+              }
+            })
+            break
+
+          case 'registeredIn':
+            must.push({
+              term: {
+                'legalStatuses.REGISTERED.createdAtLocation': value
+              }
+            })
+            break
+
+          case 'declaredBy':
+            must.push({
+              term: { 'legalStatuses.DECLARED.createdBy': value }
+            })
+            break
+
+          case 'registeredBy':
+            must.push({
+              term: {
+                'legalStatuses.REGISTERED.createdBy': value
+              }
+            })
+            break
+
+          // Niger : mêmes cas que buildClause() ci-dessus, pour que le
+          // chemin recherche/liste de travail respecte la même restriction
+          // de statut/indicateurs que la lecture d'un acte unique
+          // (canAccessEventWithScope) — voir CONTEXTE-PROJET.md.
+          case 'status': {
+            const statusValue = value as unknown as
+              | z.infer<typeof ExactStatus>
+              | z.infer<typeof AnyOfStatus>
+            if (statusValue.type === 'anyOf') {
+              must.push({ terms: { status: statusValue.terms } })
+            } else {
+              must.push({ term: { status: statusValue.term } })
+            }
+            break
+          }
+
+          case 'flags': {
+            const flagsValue = value as unknown as z.infer<typeof ContainsFlags>
+            if (flagsValue.anyOf) {
+              must.push({ terms: { flags: flagsValue.anyOf } })
+            }
+            if (flagsValue.noneOf) {
+              must.push({
+                bool: {
+                  must_not: {
+                    terms: { flags: flagsValue.noneOf }
+                  },
+                  should: undefined
+                }
+              })
+            }
+            if (flagsValue.allOf) {
+              must.push(
+                ...flagsValue.allOf.map((flag) => ({ term: { flags: flag } }))
+              )
+            }
+            break
+          }
+
+          default:
+            throw new Error(`Unsupported filter property: ${filterProperty}`)
+        }
+      }
+
+      // If this scope had no active filters, ignore it
+      if (!must.length) {
+        return null
+      }
+
+      return {
+        bool: {
+          must
+        }
+      }
+    })
+    .filter((q) => q !== null)
+
+  if (!scopeQueries.length) {
+    return {
+      bool: {
+        must: [query],
+        should: undefined
+      }
+    }
+  }
+
+  return {
+    bool: {
+      must: [query],
+      filter: {
+        bool: {
+          should: scopeQueries,
+          minimum_should_match: 1
+        }
+      }
+    }
+  } as estypes.QueryDslQueryContainer
+}

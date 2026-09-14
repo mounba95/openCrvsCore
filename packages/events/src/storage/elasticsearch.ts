@@ -1,0 +1,46 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import * as elasticsearch from '@elastic/elasticsearch'
+import { env } from '@events/environment'
+import { FIELD_ID_SEPARATOR } from '@events/service/indexing/utils'
+
+let client: elasticsearch.Client | undefined
+
+/** @knipignore */
+export const getOrCreateClient = () => {
+  if (!client) {
+    client = new elasticsearch.Client({
+      node: env.ES_URL
+    })
+
+    return client
+  }
+
+  return client
+}
+
+export function getEventAliasName() {
+  return env.ES_INDEX_PREFIX
+}
+
+export function getEventIndexName(eventType: string) {
+  return `${env.ES_INDEX_PREFIX}_${eventType}`
+    .toLowerCase()
+    .replaceAll('.', FIELD_ID_SEPARATOR)
+}
+
+export function getTemporaryIndexName(eventType: string, timestamp: number) {
+  return `${getEventIndexName(eventType)}_${timestamp}`
+}
+
+export function getReindexingStatusIndexName() {
+  return env.ES_REINDEXING_STATUS_INDEX
+}

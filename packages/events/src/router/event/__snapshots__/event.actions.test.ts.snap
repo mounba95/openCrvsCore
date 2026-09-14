@@ -1,0 +1,265 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Action updates > partial declaration update accounts for conditional field values not in payload 1`] = `
+{
+  "applicant.address": {
+    "addressType": "DOMESTIC",
+    "administrativeArea": "27160bbd-32d1-4625-812f-860226bfb92a",
+    "country": "FAR",
+    "streetLevelDetails": {
+      "district2": "Example District 2",
+      "number": "55",
+      "residentialArea": "Example Residential Area",
+      "state": "Example State",
+      "street": "Example Street",
+      "town": "Example Town",
+      "zipCode": "123456",
+    },
+  },
+  "applicant.age": 25,
+  "applicant.dobUnknown": true,
+  "applicant.email": "test@opencrvs.org",
+  "applicant.image": {
+    "originalFilename": "abcd.png",
+    "path": "4f095fc4-4312-4de2-aa38-86dcc0f71044.png",
+    "type": "image/png",
+  },
+  "applicant.name": {
+    "firstname": "Sara",
+    "surname": "Sarajanen",
+  },
+  "recommender.none": true,
+}
+`;
+
+exports[`Adding actions > Event document contains all created actions 1`] = `"47f6b2e2-e69e-4401-92d8-35617de8137b.png"`;
+
+exports[`Adding actions > Event document contains all created actions 2`] = `"47f6b2e2-e69e-4401-92d8-35617de8137b.png"`;
+
+exports[`Adding actions > Event document contains all created actions 3`] = `"47f6b2e2-e69e-4401-92d8-35617de8137b.png"`;
+
+exports[`Adding actions > Event document contains all created actions 4`] = `"47f6b2e2-e69e-4401-92d8-35617de8137b.png"`;
+
+exports[`Adding actions > Event document contains all created actions 5`] = `"47f6b2e2-e69e-4401-92d8-35617de8137b.png"`;
+
+exports[`Adding actions > Event document contains all created actions 6`] = `"47f6b2e2-e69e-4401-92d8-35617de8137b.png"`;
+
+exports[`Adding actions > Event document contains all created actions 7`] = `"47f6b2e2-e69e-4401-92d8-35617de8137b.png"`;
+
+exports[`Adding actions > Event document contains all created actions 8`] = `"47f6b2e2-e69e-4401-92d8-35617de8137b.png"`;
+
+exports[`Adding actions > Event document contains all created actions 9`] = `"47f6b2e2-e69e-4401-92d8-35617de8137b.png"`;
+
+exports[`Adding actions > Event document contains all created actions 10`] = `"47f6b2e2-e69e-4401-92d8-35617de8137b.png"`;
+
+exports[`Adding actions > Event document contains all created actions 11`] = `
+{
+  "actions": [
+    {
+      "createdAt": "[sanitized]",
+      "createdAtLocation": "[sanitized]",
+      "createdBy": "[sanitized]",
+      "createdByRole": "REGISTRATION_AGENT",
+      "createdBySignature": "[sanitized]",
+      "createdByUserType": "[sanitized]",
+      "declaration": {},
+      "id": "[sanitized]",
+      "status": "Accepted",
+      "transactionId": "[sanitized]",
+      "type": "CREATE",
+    },
+    {
+      "assignedTo": "[sanitized]",
+      "createdAt": "[sanitized]",
+      "createdAtLocation": "[sanitized]",
+      "createdBy": "[sanitized]",
+      "createdByRole": "REGISTRATION_AGENT",
+      "createdBySignature": "[sanitized]",
+      "createdByUserType": "[sanitized]",
+      "declaration": {},
+      "id": "[sanitized]",
+      "status": "Accepted",
+      "transactionId": "[sanitized]",
+      "type": "ASSIGN",
+    },
+    {
+      "annotation": {
+        "review.comment": "review.comment-TEXTAREA-0",
+        "review.signature": {
+          "originalFilename": "abcd.png",
+          "path": "4f095fc4-4312-4de2-aa38-86dcc0f71044.png",
+          "type": "image/png",
+        },
+      },
+      "createdAt": "[sanitized]",
+      "createdAtLocation": "[sanitized]",
+      "createdBy": "[sanitized]",
+      "createdByRole": "REGISTRATION_AGENT",
+      "createdBySignature": "[sanitized]",
+      "createdByUserType": "[sanitized]",
+      "declaration": {
+        "applicant.address": {
+          "addressType": "DOMESTIC",
+          "administrativeArea": "27160bbd-32d1-4625-812f-860226bfb92a",
+          "country": "FAR",
+          "streetLevelDetails": {
+            "district2": "Example District 2",
+            "number": "55",
+            "residentialArea": "Example Residential Area",
+            "state": "Example State",
+            "street": "Example Street",
+            "town": "Example Town",
+            "zipCode": "123456",
+          },
+        },
+        "applicant.age": 19,
+        "applicant.dobUnknown": true,
+        "applicant.email": "test@opencrvs.org",
+        "applicant.image": {
+          "originalFilename": "abcd.png",
+          "path": "4f095fc4-4312-4de2-aa38-86dcc0f71044.png",
+          "type": "image/png",
+        },
+        "applicant.name": {
+          "firstname": "Sara",
+          "surname": "Sarajanen",
+        },
+        "recommender.none": true,
+      },
+      "id": "[sanitized]",
+      "status": "Requested",
+      "transactionId": "[sanitized]",
+      "type": "DECLARE",
+    },
+    {
+      "createdAt": "[sanitized]",
+      "createdAtLocation": "[sanitized]",
+      "createdBy": "[sanitized]",
+      "createdByRole": "REGISTRATION_AGENT",
+      "createdBySignature": "[sanitized]",
+      "createdByUserType": "[sanitized]",
+      "declaration": {},
+      "id": "[sanitized]",
+      "originalActionId": "[sanitized]",
+      "status": "Accepted",
+      "transactionId": "[sanitized]",
+      "type": "DECLARE",
+    },
+    {
+      "createdAt": "[sanitized]",
+      "createdAtLocation": "[sanitized]",
+      "createdBy": "[sanitized]",
+      "createdByRole": "REGISTRATION_AGENT",
+      "createdBySignature": "[sanitized]",
+      "createdByUserType": "[sanitized]",
+      "declaration": {},
+      "id": "[sanitized]",
+      "status": "Accepted",
+      "transactionId": "[sanitized]",
+      "type": "UNASSIGN",
+    },
+    {
+      "assignedTo": "[sanitized]",
+      "createdAt": "[sanitized]",
+      "createdAtLocation": "[sanitized]",
+      "createdBy": "[sanitized]",
+      "createdByRole": "REGISTRATION_AGENT",
+      "createdBySignature": "[sanitized]",
+      "createdByUserType": "[sanitized]",
+      "declaration": {},
+      "id": "[sanitized]",
+      "status": "Accepted",
+      "transactionId": "[sanitized]",
+      "type": "ASSIGN",
+    },
+    {
+      "annotation": {},
+      "createdAt": "[sanitized]",
+      "createdAtLocation": "[sanitized]",
+      "createdBy": "[sanitized]",
+      "createdByRole": "REGISTRATION_AGENT",
+      "createdBySignature": "[sanitized]",
+      "createdByUserType": "[sanitized]",
+      "declaration": {
+        "applicant.address": {
+          "addressType": "DOMESTIC",
+          "administrativeArea": "27160bbd-32d1-4625-812f-860226bfb92a",
+          "country": "FAR",
+          "streetLevelDetails": {
+            "district2": "Example District 2",
+            "number": "55",
+            "residentialArea": "Example Residential Area",
+            "state": "Example State",
+            "street": "Example Street",
+            "town": "Example Town",
+            "zipCode": "123456",
+          },
+        },
+        "applicant.age": 19,
+        "applicant.dobUnknown": true,
+        "applicant.email": "test@opencrvs.org",
+        "applicant.image": {
+          "originalFilename": "abcd.png",
+          "path": "4f095fc4-4312-4de2-aa38-86dcc0f71044.png",
+          "type": "image/png",
+        },
+        "applicant.name": {
+          "firstname": "Sarachella",
+          "surname": "Smith",
+        },
+        "recommender.none": true,
+      },
+      "id": "[sanitized]",
+      "status": "Requested",
+      "transactionId": "[sanitized]",
+      "type": "REGISTER",
+    },
+    {
+      "createdAt": "[sanitized]",
+      "createdAtLocation": "[sanitized]",
+      "createdBy": "[sanitized]",
+      "createdByRole": "REGISTRATION_AGENT",
+      "createdBySignature": "[sanitized]",
+      "createdByUserType": "[sanitized]",
+      "declaration": {},
+      "id": "[sanitized]",
+      "originalActionId": "[sanitized]",
+      "registrationNumber": "[sanitized]",
+      "status": "Accepted",
+      "transactionId": "[sanitized]",
+      "type": "REGISTER",
+    },
+    {
+      "createdAt": "[sanitized]",
+      "createdAtLocation": "[sanitized]",
+      "createdBy": "[sanitized]",
+      "createdByRole": "REGISTRATION_AGENT",
+      "createdBySignature": "[sanitized]",
+      "createdByUserType": "[sanitized]",
+      "declaration": {},
+      "id": "[sanitized]",
+      "status": "Accepted",
+      "transactionId": "[sanitized]",
+      "type": "UNASSIGN",
+    },
+    {
+      "createdAt": "[sanitized]",
+      "createdAtLocation": "[sanitized]",
+      "createdBy": "[sanitized]",
+      "createdByRole": "REGISTRATION_AGENT",
+      "createdBySignature": "[sanitized]",
+      "createdByUserType": "[sanitized]",
+      "declaration": {},
+      "id": "[sanitized]",
+      "status": "Accepted",
+      "transactionId": "[sanitized]",
+      "type": "READ",
+    },
+  ],
+  "createdAt": "[sanitized]",
+  "id": "[sanitized]",
+  "trackingId": "[sanitized]",
+  "type": "tennis-club-membership",
+  "updatedAt": "[sanitized]",
+}
+`;

@@ -1,0 +1,285 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import { useSelector } from 'react-redux'
+import { getScope, getUserDetails } from '@client/profile/profileSelectors'
+import {
+  findScope,
+  User,
+  Location,
+  hasScope as hasScopeFromCommons,
+  hasAnyScope as hasAnyScopeFromCommons,
+  ScopeType,
+  getAcceptedScopesByType,
+  getScopeOptionValue,
+  JurisdictionFilter,
+  canAccessOtherUserWithScopes,
+  getAdministrativeAreaHierarchy,
+  UserScopeV2,
+  UUID
+} from '@opencrvs/commons/client'
+import { isLocationUnderJurisdiction } from '@client/utils/locationUtils'
+import { useLocations } from '@client/v2-events/hooks/useLocations'
+import { useAdministrativeAreas } from '../v2-events/hooks/useAdministrativeAreas'
+
+export function usePermissions() {
+  const userScopes = useSelector(getScope) || []
+  const currentUser = useSelector(getUserDetails)
+  const userPrimaryOfficeId = currentUser?.primaryOfficeId
+
+  const { getLocations } = useLocations()
+  const locations = getLocations.useSuspenseQuery()
+  const { getAdministrativeAreas } = useAdministrativeAreas()
+  const administrativeAreas = getAdministrativeAreas.useSuspenseQuery()
+
+  const hasAnyScope = (neededScopes: ScopeType[]) =>
+    hasAnyScopeFromCommons(userScopes, neededScopes)
+
+  const hasScope = (neededScope: ScopeType) =>
+    hasScopeFromCommons(userScopes, neededScope)
+
+  const canSearchRecords =
+    getAcceptedScopesByType({
+      acceptedScopes: ['record.search'],
+      scopes: userScopes ?? []
+    }).length > 0
+
+  const canReadUser = (user: Pick<User, 'id' | 'primaryOfficeId'>) => {
+    if (!userPrimaryOfficeId) {
+      return false
+    }
+
+    const acceptedScopes = getAcceptedScopesByType({
+      acceptedScopes: ['user.read'],
+      scopes: userScopes
+    })
+
+    const accessLevels = acceptedScopes.map((s) =>
+      getScopeOptionValue(s, 'accessLevel')
+    )
+
+    if (accessLevels.includes(JurisdictionFilter.enum.all)) {
+      return true
+    }
+
+    if (accessLevels.includes(JurisdictionFilter.enum.location)) {
+      return user.primaryOfficeId === userPrimaryOfficeId
+    }
+
+    if (accessLevels.includes(JurisdictionFilter.enum.administrativeArea)) {
+      return isLocationUnderJurisdiction({
+        locationId: userPrimaryOfficeId,
+        otherLocationId: user.primaryOfficeId,
+        locations,
+        administrativeAreas
+      })
+    }
+
+    if (hasScope('user.read-only-my-audit')) {
+      return user.id === currentUser?.id
+    }
+
+    return false
+  }
+
+  const canEditUser = (user: User) => {
+    if (!currentUser) {
+      return false
+    }
+
+    const editScopes = getAcceptedScopesByType({
+      acceptedScopes: ['user.edit'],
+      scopes: userScopes
+    }) as UserScopeV2[]
+
+    const administrativeHierarchy = getAdministrativeAreaHierarchy(
+      user.administrativeAreaId,
+      administrativeAreas
+    ).map((area) => area.id as UUID)
+
+    return canAccessOtherUserWithScopes({
+      scopes: editScopes,
+      userToAccess: {
+        role: user.role,
+        primaryOfficeId: user.primaryOfficeId,
+        administrativeHierarchy
+      },
+      user: currentUser
+    })
+  }
+
+  const creatableRoleIds = findScope(userScopes ?? [], 'user.create')?.options
+    ?.role
+
+  const canCreateUser = Array.isArray(creatableRoleIds)
+    ? creatableRoleIds.length > 0
+    : hasScope('user.create')
+
+  const organisationReadLocationsScopes = getAcceptedScopesByType({
+    acceptedScopes: ['organisation.read-locations'],
+    scopes: userScopes
+  })
+
+  const organisationReadAccessLevels = organisationReadLocationsScopes.map(
+    (s) => getScopeOptionValue(s, 'accessLevel')
+  )
+
+  const canAccessOffice = (office: Pick<Location, 'id'>) => {
+    if (!userPrimaryOfficeId) {
+      return false
+    }
+
+    if (organisationReadAccessLevels.includes(JurisdictionFilter.enum.all)) {
+      return true
+    }
+
+    if (
+      organisationReadAccessLevels.includes(JurisdictionFilter.enum.location)
+    ) {
+      return office.id === userPrimaryOfficeId
+    }
+
+    if (
+      organisationReadAccessLevels.includes(
+        JurisdictionFilter.enum.administrativeArea
+      )
+    ) {
+      return isLocationUnderJurisdiction({
+        locationId: userPrimaryOfficeId,
+        otherLocationId: office.id,
+        locations,
+        administrativeAreas
+      })
+    }
+
+    return false
+  }
+
+  const manageRegistersScopes = getAcceptedScopesByType({
+    acceptedScopes: ['organisation.manage-registers'],
+    scopes: userScopes
+  })
+
+  const manageRegistersAccessLevels = manageRegistersScopes.map((s) =>
+    getScopeOptionValue(s, 'accessLevel')
+  )
+
+  /**
+   * Niger : création/clôture des registres d'état civil, par commune — voir
+   * CONTEXTE-PROJET.md §51.
+   */
+  const canManageRegisters = (office: Pick<Location, 'id'>) => {
+    if (!userPrimaryOfficeId) {
+      return false
+    }
+
+    if (manageRegistersAccessLevels.includes(JurisdictionFilter.enum.all)) {
+      return true
+    }
+
+    if (
+      manageRegistersAccessLevels.includes(JurisdictionFilter.enum.location)
+    ) {
+      return office.id === userPrimaryOfficeId
+    }
+
+    if (
+      manageRegistersAccessLevels.includes(
+        JurisdictionFilter.enum.administrativeArea
+      )
+    ) {
+      return isLocationUnderJurisdiction({
+        locationId: userPrimaryOfficeId,
+        otherLocationId: office.id,
+        locations,
+        administrativeAreas
+      })
+    }
+
+    return false
+  }
+
+  /**
+   * Niger : délais légaux de déclaration et liste des communes en situation
+   * d'urgence — réglages nationaux (pas propres à une commune), donc
+   * réservés aux détenteurs de `organisation.manage-registers` avec une
+   * portée `all`, contrairement à `canManageRegisters` qui accepte aussi une
+   * portée limitée à une commune/zone. Voir
+   * `src/api/declarationDeadlines/handler.ts` côté countryconfig (même
+   * exigence côté serveur).
+   */
+  const canManageDeclarationDeadlines = manageRegistersAccessLevels.includes(
+    JurisdictionFilter.enum.all
+  )
+
+  const userCreateScopes = getAcceptedScopesByType({
+    acceptedScopes: ['user.create'],
+    scopes: userScopes
+  })
+
+  const userCreateReadAccessLevels = userCreateScopes.map((s) =>
+    getScopeOptionValue(s, 'accessLevel')
+  )
+  const canAddOfficeUsers = (office: Pick<Location, 'id'>) => {
+    if (!userPrimaryOfficeId) {
+      return false
+    }
+
+    if (userCreateReadAccessLevels.includes(JurisdictionFilter.enum.all)) {
+      return true
+    }
+
+    if (userCreateReadAccessLevels.includes(JurisdictionFilter.enum.location)) {
+      return office.id === userPrimaryOfficeId
+    }
+
+    if (
+      userCreateReadAccessLevels.includes(
+        JurisdictionFilter.enum.administrativeArea
+      )
+    ) {
+      return isLocationUnderJurisdiction({
+        locationId: userPrimaryOfficeId,
+        otherLocationId: office.id,
+        locations,
+        administrativeAreas
+      })
+    }
+
+    return false
+  }
+
+  const canAccessMultipleLocations = () => {
+    let howManyLocationsUserHasAccessTo = 0
+    for (const location of locations.values()) {
+      if (canAccessOffice(location)) {
+        howManyLocationsUserHasAccessTo++
+      }
+      if (howManyLocationsUserHasAccessTo > 1) {
+        return true
+      }
+    }
+    return false
+  }
+
+  return {
+    hasScope,
+    hasAnyScope,
+    canSearchRecords,
+    canReadUser,
+    canEditUser,
+    canCreateUser,
+    canAccessOffice,
+    canAddOfficeUsers,
+    canAccessMultipleLocations,
+    canManageRegisters,
+    canManageDeclarationDeadlines
+  }
+}

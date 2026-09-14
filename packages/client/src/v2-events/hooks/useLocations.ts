@@ -1,0 +1,142 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query'
+import { Location, UUID } from '@opencrvs/commons/client'
+import { trpcOptionsProxy, useTRPC } from '@client/v2-events/trpc'
+import { setQueryDefaults } from '../features/events/useEvents/procedures/utils'
+
+setQueryDefaults(trpcOptionsProxy.locations.list, {
+  meta: {
+    useLargeQueryStorage: true
+  },
+  queryFn: async (...params) => {
+    const queryOptions = trpcOptionsProxy.locations.list.queryOptions()
+    if (typeof queryOptions.queryFn !== 'function') {
+      throw new Error('queryFn is not a function')
+    }
+    const locations = await queryOptions.queryFn(...params)
+    return new Map<UUID, Location>(locations.map((l) => [l.id, l]))
+  },
+  staleTime: 1000 * 60 * 60 * 24 // keep it in cache 1 day
+})
+
+setQueryDefaults(trpcOptionsProxy.locations.get, {
+  queryFn: async (...params) => {
+    const {
+      queryKey: [, input]
+    } = params[0]
+
+    const queryOptions = trpcOptionsProxy.locations.get.queryOptions(
+      input.input
+    )
+
+    if (typeof queryOptions.queryFn !== 'function') {
+      throw new Error('queryFn is not a function')
+    }
+
+    return await queryOptions.queryFn(...params)
+  },
+  staleTime: 1000 * 60 * 60 * 24
+})
+
+setQueryDefaults(trpcOptionsProxy.locations.getLocationHierarchy, {
+  queryFn: async (...params) => {
+    const {
+      queryKey: [, input]
+    } = params[0]
+
+    const queryOptions =
+      trpcOptionsProxy.locations.getLocationHierarchy.queryOptions(input.input)
+
+    if (typeof queryOptions.queryFn !== 'function') {
+      throw new Error('queryFn is not a function')
+    }
+
+    return await queryOptions.queryFn(...params)
+  },
+  staleTime: 1000 * 60 * 60 * 24
+})
+
+export function useLocations() {
+  const trpc = useTRPC()
+  return {
+    getLocations: {
+      useSuspenseQuery: ({
+        isActive,
+        locationIds,
+        locationType
+      }: {
+        isActive?: boolean
+        locationIds?: UUID[]
+        locationType?: string
+      } = {}) => {
+        // We intentionally remove `queryFn` here because we already set a global default
+        // via `setQueryDefaults`. Passing it again would override caching/persistence.
+        // The `...rest` spread carries over things like staleTime, gcTime, enabled, etc.
+        // Then we re-attach the queryKey explicitly so React Query can identify this cache.
+        const { queryFn, ...rest } =
+          trpcOptionsProxy.locations.list.queryOptions()
+
+        return useSuspenseQuery({
+          ...rest,
+          queryKey: trpc.locations.list.queryKey({
+            isActive,
+            locationIds,
+            locationType
+          })
+        }).data as unknown as Map<UUID, Location>
+      }
+    },
+    getLocation: {
+      useQuery: (id: string) => {
+        const { queryFn, ...options } =
+          trpcOptionsProxy.locations.get.queryOptions({ id })
+        return useQuery({
+          ...options,
+          queryKey: trpc.locations.get.queryKey({ id })
+        })
+      }
+    },
+    getLocationHierarchy: {
+      useSuspenseQuery: (locationId: UUID) => {
+        const { queryFn, ...options } =
+          trpcOptionsProxy.locations.getLocationHierarchy.queryOptions({
+            locationId
+          })
+        return useSuspenseQuery({
+          ...options,
+          queryKey: trpc.locations.getLocationHierarchy.queryKey({
+            locationId
+          })
+        }).data
+      },
+      useQuery: (
+        locationId: UUID,
+        options?: {
+          enabled?: boolean
+        }
+      ) => {
+        const { queryFn, ...rest } =
+          trpcOptionsProxy.locations.getLocationHierarchy.queryOptions({
+            locationId
+          })
+        return useQuery({
+          ...rest,
+          ...options,
+          queryKey: trpc.locations.getLocationHierarchy.queryKey({
+            locationId
+          })
+        }).data
+      }
+    }
+  }
+}

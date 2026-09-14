@@ -1,0 +1,131 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import { Readable } from 'stream'
+import fetch from 'node-fetch'
+import { zfd } from 'zod-form-data'
+import * as z from 'zod/v4'
+import FormData from 'form-data'
+import {
+  DocumentPath,
+  getFilePathsFromEvent,
+  joinUrlPaths,
+  EventDocument
+} from '@opencrvs/commons'
+import { env } from '@events/environment'
+
+export async function deleteFile(path: DocumentPath | string, token: string) {
+  const res = await fetch(
+    new URL(joinUrlPaths('/files', path), env.DOCUMENTS_URL),
+    {
+      method: 'DELETE',
+      headers: {
+        Authorization: token
+      }
+    }
+  )
+
+  return res.ok
+}
+export async function fileExists(path: DocumentPath | string, token: string) {
+  const res = await fetch(
+    new URL(joinUrlPaths('/files', path), env.DOCUMENTS_URL),
+    {
+      method: 'HEAD',
+      headers: {
+        Authorization: token
+      }
+    }
+  )
+
+  if (res.status === 404) {
+    return false
+  } else if (!res.ok) {
+    throw new Error(
+      `Failed to check file existence: ${res.status} ${res.statusText}`
+    )
+  }
+
+  return true
+}
+
+export async function listFiles(path: string, token: string) {
+  const res = await fetch(
+    new URL(joinUrlPaths('/list-files', path), env.DOCUMENTS_URL),
+    {
+      method: 'GET',
+      headers: {
+        Authorization: token
+      }
+    }
+  )
+
+  if (!res.ok) {
+    throw new Error(`Failed to list files in ${path}`)
+  }
+
+  return res.json() as Promise<DocumentPath[]>
+}
+
+export async function cleanupUnreferencedFiles(
+  event: EventDocument,
+  token: string
+) {
+  const referencedFiles = getFilePathsFromEvent(event)
+  const filesSavedInMinio = await listFiles(event.id, token)
+
+  const filesToDelete = filesSavedInMinio.filter(
+    (file) => !referencedFiles.includes(file)
+  )
+
+  return Promise.all(
+    filesToDelete.map(async (file: DocumentPath) => deleteFile(file, token))
+  )
+}
+
+export const AttachmentInput = zfd.formData({
+  file: zfd.file(),
+  transactionId: zfd.text(),
+  path: zfd.text(z.string().min(1).optional())
+})
+
+export async function uploadFile(
+  input: z.infer<typeof AttachmentInput>,
+  token: string
+): Promise<string> {
+  const form = new FormData()
+  form.append(
+    'file',
+    Readable.from(Buffer.from(await input.file.arrayBuffer())),
+    {
+      filename: input.file.name,
+      contentType: input.file.type
+    }
+  )
+  form.append('transactionId', input.transactionId)
+  if (input.path) {
+    form.append('path', input.path)
+  }
+
+  const res = await fetch(new URL('/files', env.DOCUMENTS_URL).toString(), {
+    method: 'POST',
+    headers: {
+      ...form.getHeaders(),
+      Authorization: token
+    },
+    body: form
+  })
+
+  if (!res.ok) {
+    throw new Error(`File upload failed: ${res.status} ${res.statusText}`)
+  }
+
+  return res.text()
+}

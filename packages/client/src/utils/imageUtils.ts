@@ -1,0 +1,290 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import type { Area } from 'react-easy-crop'
+import {
+  ALLOWED_IMAGE_TYPE,
+  ALLOWED_IMAGE_TYPE_FOR_CERTIFICATE_TEMPLATE
+} from '@client/utils/constants'
+import { ImageMimeType } from '@opencrvs/commons/client'
+import type { File as FileConfig } from '@opencrvs/commons/client'
+
+export type IImage = {
+  type: string
+  data: string
+}
+
+export const ERROR_TYPES = {
+  IMAGE_TYPE: 'imageType',
+  OVERSIZED: 'overSized'
+}
+
+export const IMAGE_UPLOAD_MAX_SIZE_IN_BYTES = 5242880
+
+export const getBase64String = (file: File) => {
+  return new Promise<string | ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.readAsDataURL(file)
+    reader.onload = () => {
+      if (reader.result) {
+        return resolve(reader.result)
+      }
+    }
+    reader.onerror = (error) => reject(error)
+  })
+}
+
+export const getFileAsTextString = (file: File) => {
+  return new Promise<string | ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.readAsText(file)
+    reader.onload = () => {
+      if (reader.result) {
+        return resolve(reader.result)
+      }
+    }
+    reader.onerror = (error) => reject(error)
+  })
+}
+
+export const validateImage = async (uploadedImage: File) => {
+  if (!ALLOWED_IMAGE_TYPE.includes(uploadedImage.type)) {
+    throw new Error(ERROR_TYPES.IMAGE_TYPE)
+  }
+
+  if (uploadedImage.size > IMAGE_UPLOAD_MAX_SIZE_IN_BYTES) {
+    throw new Error(ERROR_TYPES.OVERSIZED)
+  }
+
+  const fileAsBase64 = await getBase64String(uploadedImage)
+
+  return fileAsBase64.toString()
+}
+export const validateCertificateTemplate = async (uploadedImage: File) => {
+  if (
+    !ALLOWED_IMAGE_TYPE_FOR_CERTIFICATE_TEMPLATE.includes(uploadedImage.type)
+  ) {
+    throw new Error(ERROR_TYPES.IMAGE_TYPE)
+  }
+  const fileAsText = await getFileAsTextString(uploadedImage)
+  return fileAsText.toString()
+}
+
+const createImage = (src: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const image = new Image()
+    image.addEventListener('load', () => resolve(image))
+    image.addEventListener('error', (error) => reject(error))
+    image.src = src
+  })
+
+export async function getCroppedImage(imageSrc: IImage, croppedArea: Area) {
+  const image: HTMLImageElement = await createImage(imageSrc.data)
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+
+  if (!ctx) {
+    return null
+  }
+
+  canvas.width = image.width
+  canvas.height = image.height
+
+  ctx.drawImage(image, 0, 0)
+
+  // croppedAreaPixels values are bounding box relative
+  // extract the cropped image using these values
+  const data = ctx.getImageData(
+    croppedArea.x,
+    croppedArea.y,
+    croppedArea.width,
+    croppedArea.height
+  )
+
+  // set canvas width to final desired crop size - this will clear existing context
+  canvas.width = croppedArea.width
+  canvas.height = croppedArea.height
+
+  // paste generated image at the top left corner
+  ctx.putImageData(data, 0, 0)
+
+  const file = await new Promise<File | null>((resolve) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        resolve(null)
+        return
+      }
+      resolve(new File([blob], 'image.jpeg', { type: 'image/jpeg' }));
+    });
+  });
+  return file
+}
+
+export async function getCroppedImageWithTargetSize(
+  imageSrc: IImage,
+  croppedArea: Area,
+  targetSize?: { width: number; height: number }
+): Promise<IImage | null> {
+  const image: HTMLImageElement = await createImage(imageSrc.data)
+
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+
+  const outputWidth = targetSize?.width ?? croppedArea.width
+  const outputHeight = targetSize?.height ?? croppedArea.height
+
+  canvas.width = outputWidth
+  canvas.height = outputHeight
+
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+
+  ctx.drawImage(
+    image,
+    croppedArea.x,
+    croppedArea.y,
+    croppedArea.width,
+    croppedArea.height,
+    0,
+    0,
+    outputWidth,
+    outputHeight
+  )
+
+  return {
+    type: 'image/jpeg',
+    data: canvas.toDataURL('image/jpeg', 0.9)
+  }
+}
+
+export async function fetchImageAsBase64(url: string): Promise<string> {
+  const response = await fetch(url)
+  const blob = await response.blob()
+
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const base64 = reader.result as string
+      resolve(base64)
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
+}
+
+export const bytesToMB = (bytes: number) =>
+  Number(Number(bytes / (1024 * 1024)).toFixed(2))
+
+export async function fetchFileFromUrl(
+  externalUrl: string,
+  filename: string
+): Promise<File | undefined> {
+  const res = await fetch(externalUrl)
+
+  if (!res.ok) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `Failed to fetch file from URL: ${externalUrl}. Status: ${res.status} ${res.statusText}`
+    )
+
+    return undefined
+  }
+
+  const blob = await res.blob()
+
+  return new File([blob], filename, { type: blob.type })
+}
+
+async function getImageFromFile(
+  file: File
+): Promise<{ width: number; height: number; data: string; type: string }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      const ctx = canvas.getContext('2d')
+
+      if (!ctx) {
+        reject(new Error('Could not get canvas context'))
+        return
+      }
+
+      canvas.width = img.naturalWidth
+      canvas.height = img.naturalHeight
+
+      ctx.drawImage(img, 0, 0)
+
+      const dataUrl = canvas.toDataURL(file.type)
+      resolve({
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+        data: dataUrl,
+        type: file.type
+      })
+    }
+    img.onerror = (error) => {
+      reject(error)
+    }
+    img.src = URL.createObjectURL(file)
+  })
+}
+
+function isImageFile(file: File): boolean {
+  return Object.values(ImageMimeType.enum).includes(
+    file.type as keyof typeof ImageMimeType.enum
+  )
+}
+
+function isImageBiggerThanMaxSize(
+  imageSize: { width: number; height: number },
+  maxImageSize: { width: number; height: number }
+): boolean {
+  return (
+    imageSize.width > maxImageSize.width ||
+    imageSize.height > maxImageSize.height
+  )
+}
+
+export function useImageProcessing() {
+  const processImageFile = async (
+    newFile: File,
+    openModal: (image: IImage, error: string) => Promise<IImage | null>,
+    maxImageSize?: FileConfig['configuration']['maxImageSize'],
+    error?: string
+  ) => {
+    if (!isImageFile(newFile) || !maxImageSize) {
+      return newFile
+    }
+
+    const image = await getImageFromFile(newFile)
+    if (
+      !isImageBiggerThanMaxSize(
+        { width: image.width, height: image.height },
+        maxImageSize.targetSize
+      )
+    ) {
+      return newFile
+    }
+
+    const croppedImage = await openModal(image, error || '')
+    if (!croppedImage) {
+      return null // User cancelled
+    }
+
+    const croppedImageFile = await fetchFileFromUrl(
+      croppedImage.data,
+      newFile.name
+    )
+    return croppedImageFile
+  }
+
+  return { processImageFile }
+}

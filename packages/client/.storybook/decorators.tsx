@@ -1,0 +1,94 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import React from 'react'
+import type { Decorator } from '@storybook/react'
+import {
+  EventDocument,
+  getOrThrow,
+  getTokenPayload,
+  TestUserRole,
+  ValidatorContext,
+  V2_DEFAULT_MOCK_ADMINISTRATIVE_AREAS_MAP
+} from '@opencrvs/commons/client'
+import { testDataGenerator } from '@client/tests/test-data-generators'
+import { getLeafAdministrativeAreaIds } from '@client/v2-events/hooks/useAdministrativeAreas'
+
+const generator = testDataGenerator(1337)
+
+/**
+ *
+ * @returns Stroybook decorator that provides a validator context based on the user role specified in the story parameters.
+ *
+ * @example Setting up meta for a story:
+ *
+ * const meta: Meta<FormFieldGeneratorProps> = {
+    decorators: [
+      (Story, context) => <TRPCProvider><Story {...context} /></TRPCProvider>,
+      withValidatorContext
+    ]
+  }
+ * @example Setting user role in a story:
+export const DataDisplayWithConditionallyHiddenFields: StoryObj<
+  typeof FormFieldGenerator
+> = {
+      parameters: {
+        layout: 'centered',
+        userRole: TestUserRole.enum.REGISTRATION_AGENT
+      }
+    }
+ */
+export const withValidatorContext: Decorator = (Story, context) => {
+  const validatorContext: ValidatorContext = getTestValidatorContext(
+    context.parameters.userRole
+  )
+
+  return (
+    <Story
+      args={{ ...context.args, validatorContext }}
+      validatorContext={validatorContext}
+    />
+  )
+}
+export function getTestValidatorContext(
+  userRole?: TestUserRole,
+  event?: EventDocument
+) {
+  let token
+
+  if (userRole === TestUserRole.enum.FIELD_AGENT) {
+    token = generator.user.token.fieldAgent
+  } else if (userRole === TestUserRole.enum.LOCAL_SYSTEM_ADMIN) {
+    token = generator.user.token.localSystemAdmin
+  } else if (userRole === TestUserRole.enum.REGISTRATION_AGENT) {
+    token = generator.user.token.registrationAgent
+  } else if (userRole === TestUserRole.enum.COMMUNITY_LEADER) {
+    token = generator.user.token.communityLeader
+  } else if (userRole === TestUserRole.enum.PROVINCIAL_REGISTRAR) {
+    token = generator.user.token.provincialRegistrar
+  } else {
+    token = generator.user.token.localRegistrar
+  }
+
+  const user = getOrThrow(
+    getTokenPayload(token),
+    'Token payload missing. User is not logged in'
+  )
+
+  const leafAdminStructureLocationIds = getLeafAdministrativeAreaIds(
+    V2_DEFAULT_MOCK_ADMINISTRATIVE_AREAS_MAP
+  )
+
+  return {
+    user,
+    leafAdminStructureLocationIds,
+    event
+  }
+}

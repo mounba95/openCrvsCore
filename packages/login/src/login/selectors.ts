@@ -1,0 +1,82 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import { LoginState } from '@login/login/reducer'
+import { IStoreState } from '@login/store'
+import * as React from 'react'
+import { useSelector } from 'react-redux'
+const getPartialState = (store: IStoreState): LoginState => store.login
+
+function getKey<K extends keyof LoginState>(store: IStoreState, key: K) {
+  return getPartialState(store)[key]
+}
+export const getSubmissionError = (
+  store: IStoreState
+): LoginState['submissionError'] => getKey(store, 'submissionError')
+
+export const getErrorCode = (store: IStoreState): LoginState['errorCode'] =>
+  getKey(store, 'errorCode')
+
+export const getResentAuthenticationCode = (
+  store: IStoreState
+): LoginState['resentAuthenticationCode'] =>
+  getKey(store, 'resentAuthenticationCode')
+
+export const getReloadModalVisibility = (
+  store: IStoreState
+): LoginState['reloadModalVisibility'] => getKey(store, 'reloadModalVisibility')
+
+export const getsubmitting = (store: IStoreState): LoginState['submitting'] =>
+  getKey(store, 'submitting')
+
+export function selectCountryLogo(store: IStoreState) {
+  return getKey(store, 'config').COUNTRY_LOGO?.file
+}
+
+export function selectCountryBackground() {
+  const countryBackground = window.config.LOGIN_BACKGROUND
+  if (countryBackground?.backgroundImage) {
+    return {
+      backgroundColor: '',
+      backgroundImage: countryBackground.backgroundImage,
+      imageFit: countryBackground.imageFit ?? ''
+    }
+  } else if (countryBackground?.backgroundColor) {
+    return {
+      backgroundColor: countryBackground.backgroundColor,
+      backgroundImage: '',
+      imageFit: ''
+    }
+  } else {
+    return {
+      backgroundColor: '',
+      backgroundImage: '',
+      imageFit: ''
+    }
+  }
+}
+export function selectApplicationName(store: IStoreState) {
+  return getKey(store, 'config').APPLICATION_NAME
+}
+
+export const getStepOneDetails = (
+  store: IStoreState
+): LoginState['authenticationDetails'] => getKey(store, 'authenticationDetails')
+
+export const getToken = (store: IStoreState): LoginState['token'] =>
+  getKey(store, 'token')
+
+export const getRefreshToken = (
+  store: IStoreState
+): LoginState['refreshToken'] => getKey(store, 'refreshToken')
+
+export const getRedirectToURL = (
+  store: IStoreState
+): LoginState['redirectToURL'] => getKey(store, 'redirectToURL')

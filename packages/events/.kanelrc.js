@@ -1,0 +1,38 @@
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { makeKyselyHook, kyselyCamelCaseHook } = require('kanel-kysely')
+
+const tablesToIgnore = [
+  'pgmigrations',
+  'legacy_practitioners',
+  'legacy_systems',
+  'legacy_users'
+]
+
+/** @type {import('kanel').Config} */
+module.exports = {
+  connection: {
+    connectionString: 'postgres://events_app:app_password@localhost:5432/events'
+  },
+  preDeleteOutputFolder: true,
+  schemas: ['app'],
+  outputPath: './src/storage/postgres/events/schema',
+  customTypeMap: {
+    'pg_catalog.uuid': {
+      name: 'UUID',
+      typeImports: [
+        {
+          name: 'UUID',
+          path: '@opencrvs/commons',
+          isAbsolute: true,
+          importAsType: true
+        }
+      ]
+    },
+    'pg_catalog.jsonb': 'Record<string, any>',
+    'pg_catalog.timestamptz': 'string'
+  },
+  enumStyle: 'type',
+  generateIdentifierType: null, // Kanel creates nominal branded types by default but we're using custom UUID types. This overrides that.
+  preRenderHooks: [makeKyselyHook(), kyselyCamelCaseHook],
+  typeFilter: (type) => !tablesToIgnore.includes(type.name)
+}

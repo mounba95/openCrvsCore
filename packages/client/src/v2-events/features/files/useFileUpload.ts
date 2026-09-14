@@ -1,0 +1,240 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import { useMutation } from '@tanstack/react-query'
+import { v4 as uuid } from 'uuid'
+import {
+  DocumentPath,
+  FullDocumentPath,
+  joinUrlPaths,
+  joinValues
+} from '@opencrvs/commons/client'
+import { ensureFreshAccessToken, getToken } from '@client/utils/authUtils'
+import { fetchFileFromUrl } from '@client/utils/imageUtils'
+import { cacheFile, removeCached } from '@client/v2-events/cache'
+import { queryClient } from '@client/v2-events/trpc'
+
+interface UploadFileParams {
+  file: File
+  path: string
+  meta: {
+    transactionId: string
+    referenceId: string
+  }
+}
+
+async function uploadFile({
+  file,
+  path,
+  meta
+}: UploadFileParams): Promise<{ url: string }> {
+  await ensureFreshAccessToken()
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('transactionId', meta.transactionId)
+  formData.append('path', path)
+
+  const response = await fetch('/api/upload', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${getToken()}`
+    },
+    body: formData
+  })
+
+  if (!response.ok) {
+    throw new Error('File upload failed')
+  }
+
+  return { url: await response.text() }
+}
+
+/**
+ * NOTE: This function is used to delete a file from the server.
+ * There are two worrying cases:
+ * 1. User deletes a file but does not save the changes when they leave. We try to access the file later and it is not there.
+ * 2. Documents service includes "fail-safe" for users other than the creator of the file. If a user tries to delete a file that they do not own, it will fail (silently). Given the above scenario, the file would still be there.
+ *
+ */
+async function deleteFile({ filename }: { filename: string }): Promise<void> {
+  await ensureFreshAccessToken()
+  const response = await fetch('/api/files/' + filename, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${getToken()}`
+    }
+  })
+
+  if (!response.ok) {
+    if (response.status === 403) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `Unable to hard-delete the file ${filename}. Only the creator can remove it.`
+      )
+    }
+
+    if (response.status === 404) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `Unable to hard-delete the file ${filename}. File not found.`
+      )
+    }
+
+    throw new Error('File deletion failed', { cause: response.status })
+  }
+
+  return
+}
+
+const UPLOAD_MUTATION_KEY = 'uploadFile'
+const DELETE_MUTATION_KEY = 'deleteFile'
+
+async function getPresignedUrl(filePath: DocumentPath | FullDocumentPath) {
+  await ensureFreshAccessToken()
+  const url = joinUrlPaths('/api/presigned-url', filePath)
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${getToken()}`
+    }
+  })
+
+  const res = await response.json()
+  return res
+}
+
+export async function precacheFile(path: DocumentPath | FullDocumentPath) {
+  const presignedUrl = (await getPresignedUrl(path)).presignedURL
+
+  const file = await fetchFileFromUrl(presignedUrl, path)
+
+  if (file) {
+    await cacheFile({ url: path, file })
+  }
+}
+
+queryClient.setMutationDefaults([DELETE_MUTATION_KEY], {
+  // @ts-ignore
+  retry: (_, error) => {
+    if (error.cause === 403) {
+      return false
+    }
+    if (error.cause === 404) {
+      return false
+    }
+
+    return true
+  },
+  retryDelay: 5000,
+  mutationFn: deleteFile
+})
+queryClient.setMutationDefaults([UPLOAD_MUTATION_KEY], {
+  retry: true,
+  retryDelay: 5000,
+  mutationFn: uploadFile,
+  meta: { ignoreOutbox: true }
+})
+
+interface Options {
+  onSuccess?: (data: {
+    originalFilename: string
+    type: string
+    path: DocumentPath
+    id: string
+  }) => void
+}
+
+export function useFileUpload(
+  path: string,
+  uniqueIdentifier: string,
+  options: Options = {}
+) {
+  const upload = useMutation({
+    mutationFn: async (variables: UploadFileParams) =>
+      uploadFile({ ...variables, meta: { ...variables.meta } }),
+    mutationKey: [UPLOAD_MUTATION_KEY, uniqueIdentifier],
+    onMutate: async ({ file, meta }: UploadFileParams) => {
+      const extension = file.name.split('.').pop()
+      const temporaryFilename = `${meta.transactionId}.${extension}`
+      const filePath = joinValues(
+        [path.replace(/\/$/, ''), temporaryFilename],
+        '/'
+      ) as DocumentPath
+
+      await cacheFile({ url: filePath, file })
+
+      // NOTE: In the long run, client should not reverse-engineer the file path.
+      // It should be read from the server response.
+      options.onSuccess?.({
+        ...file,
+        originalFilename: file.name,
+        type: file.type,
+        path: filePath,
+        id: meta.referenceId
+      })
+    }
+  })
+
+  const del = useMutation({
+    mutationFn: deleteFile,
+    mutationKey: [DELETE_MUTATION_KEY, uniqueIdentifier],
+    onSuccess: (data, { filename }) => {
+      void removeCached(filename as DocumentPath)
+    }
+  })
+
+  return {
+    deleteFile: (filename: string) => {
+      return del.mutate({ filename })
+    },
+    /**
+     * Uploads a file with an optional identifier.
+     *
+     * @param file - The file to be uploaded.
+     * @param referenceId An optional identifier for the file. Allows the caller to track the file when its upload completes.
+     */
+    uploadFile: (
+      file: File,
+      referenceId = 'default',
+      mutateOptions: Parameters<typeof upload.mutate>[1] = {}
+    ) => {
+      return upload.mutate(
+        {
+          file,
+          path,
+          meta: {
+            transactionId: uuid(),
+            referenceId
+          }
+        },
+        mutateOptions
+      )
+    },
+    uploadFileAsync: async (
+      file: File,
+      referenceId = 'default',
+      mutateOptions: Parameters<typeof upload.mutate>[1] = {}
+    ) => {
+      return upload.mutateAsync(
+        {
+          file,
+          path,
+          meta: {
+            transactionId: uuid(),
+            referenceId
+          }
+        },
+        mutateOptions
+      )
+    }
+  }
+}

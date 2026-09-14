@@ -1,0 +1,150 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import type { Meta, StoryObj } from '@storybook/react'
+import React from 'react'
+import styled from 'styled-components'
+import { FieldType } from '@opencrvs/commons/client'
+import { FormFieldGenerator } from '@client/v2-events/components/forms/FormFieldGenerator'
+import { TRPCProvider } from '@client/v2-events/trpc'
+import { getTestValidatorContext } from '../../../../../../.storybook/decorators'
+
+const StyledFormFieldGenerator = styled(FormFieldGenerator)`
+  width: 400px;
+`
+
+const meta: Meta<typeof StyledFormFieldGenerator> = {
+  title: 'Inputs/File',
+  decorators: [
+    (Story) => (
+      <TRPCProvider>
+        <Story />
+      </TRPCProvider>
+    )
+  ]
+}
+
+export default meta
+
+export const FileInputWithOption: StoryObj<typeof FormFieldGenerator> = {
+  name: 'File input with option',
+  parameters: {
+    layout: 'centered',
+    reactRouter: {
+      router: {
+        path: '/event/:eventId',
+        element: (
+          <StyledFormFieldGenerator
+            fields={[
+              {
+                id: 'storybook.file',
+                type: FieldType.FILE_WITH_OPTIONS,
+                configuration: {
+                  maxFileSize: 5 * 1024 * 1024,
+                  acceptedFileTypes: ['image/jpeg']
+                },
+                label: {
+                  id: 'storybook.file.label',
+                  defaultMessage: 'Upload your captured photo',
+                  description: 'The title for the file input'
+                },
+                options: [
+                  {
+                    value: 'forest',
+                    label: {
+                      id: 'storybook.file.option.forest',
+                      defaultMessage: 'Forest',
+                      description: 'Option for a forest setting'
+                    }
+                  },
+                  {
+                    value: 'beach',
+                    label: {
+                      id: 'storybook.file.option.beach',
+                      defaultMessage: 'Beach',
+                      description: 'Option for a beach setting'
+                    }
+                  },
+                  {
+                    value: 'mountain',
+                    label: {
+                      id: 'storybook.file.option.mountain',
+                      defaultMessage: 'Mountain',
+                      description: 'Option for a mountain setting'
+                    }
+                  },
+                  {
+                    value: 'desert',
+                    label: {
+                      id: 'storybook.file.option.desert',
+                      defaultMessage: 'Desert',
+                      description: 'Option for a desert setting'
+                    }
+                  },
+                  {
+                    value: 'city',
+                    label: {
+                      id: 'storybook.file.option.city',
+                      defaultMessage: 'City',
+                      description: 'Option for a city setting'
+                    }
+                  }
+                ]
+              }
+            ]}
+            id="my-form"
+            validatorContext={getTestValidatorContext()}
+          />
+        )
+      },
+      initialPath: '/event/123-kalsnk-213'
+    }
+  }
+}
+
+export const FileInputWithoutOption: StoryObj<typeof StyledFormFieldGenerator> =
+  {
+    name: 'File input without option',
+    parameters: {
+      layout: 'centered',
+      reactRouter: {
+        router: {
+          path: '/event/:eventId',
+          element: (
+            <StyledFormFieldGenerator
+              fields={[
+                {
+                  id: 'storybook.file2',
+                  type: FieldType.FILE,
+                  label: {
+                    id: 'storybook.file2.label',
+                    defaultMessage: 'Upload your photo',
+                    description: 'The title for the file input'
+                  },
+                  configuration: {
+                    maxFileSize: 5 * 1024 * 1024,
+                    fileName: {
+                      defaultMessage: 'Uploaded photo',
+                      description: 'The title for the file input',
+                      id: 'storybook.file.label'
+                    }
+                  }
+                }
+              ]}
+              id="my-form"
+              validatorContext={getTestValidatorContext()}
+            />
+          )
+        },
+        initialPath: '/event/123-kalsnk-213'
+      }
+    }
+  }

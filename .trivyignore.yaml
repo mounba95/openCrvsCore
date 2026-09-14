@@ -1,0 +1,29 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# OpenCRVS is also distributed under the terms of the Civil Registration
+# & Healthcare Disclaimer located at http://opencrvs.org/license.
+#
+# Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+misconfigurations:
+  - id: AVD-DS-0002
+    statement: Non-root users in nginx and metabase images to be addressed in follow up PR
+    paths:
+      - 'packages/client/Dockerfile'
+      - 'packages/components/Dockerfile'
+      - 'packages/login/Dockerfile'
+      - '/usr/local/share/.cache'
+vulnerabilities:
+  - id: CVE-2023-46233
+    statement: only applies to SHA-1 usage - should still be patched though
+  - id: CVE-2023-52079
+    statement: msgpackr vulnerable to dos
+  - id: CVE-2022-42003
+    statement: Transitive dependency of jest and msw. Not running in production. Likely fixed by upgrading.
+  - id: CVE-2024-37890
+    statement: ws vulnerability, transitive dependency of jest, storybook, graphql-codegen, not running in production.
+  - id: CVE-2024-45296
+    statement: Transitive dependency of react-router 5.3.4. Only affects client-side code ocrvs-7682
+  - id: CVE-2024-47068
+    statement: Transitive dependency of Vite. Not run in production and there is currently no fix.

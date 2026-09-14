@@ -1,0 +1,34 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# OpenCRVS is also distributed under the terms of the Civil Registration
+# & Healthcare Disclaimer located at http://opencrvs.org/license.
+#
+# Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+services:
+  # For dependencies, expose ports locally for dev
+  redis:
+    ports:
+      - '6379:6379'
+    logging:
+      driver: 'none'
+
+  elasticsearch:
+    ports:
+      - '9200:9200'
+      - '9300:9300'
+    volumes:
+      - './data/elasticsearch:/usr/share/elasticsearch/data'
+    logging:
+      driver: 'none'
+
+  # elasticsearch browser.  Uncomment during development, along with the environment variables for elastic above, to browse Elastic via a GUI at http://localhost:1358/
+  #dejavu:
+  #image: appbaseio/dejavu:3.2.3
+  #container_name: dejavu
+  #ports:
+  #  - "1358:1358"
+  #links:
+  #  - elasticsearch
+

@@ -1,0 +1,129 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import * as z from 'zod/v4'
+
+// How not to hardcode? these are defined in Component service
+export const AvailableIcons = z.enum([
+  'Archived',
+  'Assigned',
+  'Briefcase',
+  'Certified',
+  'Close',
+  'Collapse',
+  'Draft',
+  'DuplicateYellow',
+  'Expand',
+  'ExternalValidate',
+  'FilledCheck',
+  'InReview',
+  'Offline',
+  'Registered',
+  'RequiresUpdates',
+  'Sent',
+  'Validated',
+  'WaitingApproval',
+  'ChartActivity',
+  'Activity',
+  'Archive',
+  'ArchiveTray',
+  'ArrowLeft',
+  'ArrowRight',
+  'Buildings',
+  'Circle',
+  'CaretDown',
+  'CaretLeft',
+  'CaretRight',
+  'ChartBar',
+  'ChartLine',
+  'ChatCircle',
+  'CheckSquare',
+  'Compass',
+  'Check',
+  'Copy',
+  'Database',
+  'DotsThreeVertical',
+  'ArrowCounterClockwise',
+  'MagnifyingGlassMinus',
+  'MagnifyingGlassPlus',
+  'Export',
+  'Eye',
+  'EyeSlash',
+  'Envelope',
+  'File',
+  'FileSearch',
+  'FileMinus',
+  'FilePlus',
+  'FileText',
+  'FileX',
+  'Handshake',
+  'Gear',
+  'GitBranch',
+  'IdentificationCard',
+  'List',
+  'ListBullets',
+  'Lock',
+  'MagnifyingGlass',
+  'MapPin',
+  'Medal',
+  'NotePencil',
+  'Paperclip',
+  'PaperPlaneTilt',
+  'Pen',
+  'PenNib',
+  'Pencil',
+  'PencilSimpleLine',
+  'Phone',
+  'Plus',
+  'Printer',
+  'SignOut',
+  'Stamp',
+  'Star',
+  'Target',
+  'TextT',
+  'Trash',
+  'UploadSimple',
+  'User',
+  'UserPlus',
+  'Users',
+  'WarningCircle',
+  'X',
+  'ChatText',
+  'CircleWavyCheck',
+  'CircleWavyQuestion',
+  'ArchiveBox',
+  'ArrowCircleDown',
+  'FileArrowUp',
+  'FileDotted',
+  'Files',
+  'PencilLine',
+  'PencilCircle',
+  'UserCircle',
+  'Clock',
+  'QrCode',
+  'Webcam',
+  'Sun',
+  'DeviceTabletCamera',
+  'Globe',
+  'Fingerprint',
+  'PushPin',
+  'Timer'
+])
+
+export type AvailableIcons = z.infer<typeof AvailableIcons>
+
+export function isValidIcon(icon: string | undefined): icon is AvailableIcons {
+  if (!icon) {
+    return false
+  }
+
+  return AvailableIcons.options.includes(icon as AvailableIcons)
+}

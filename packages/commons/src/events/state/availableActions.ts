@@ -1,0 +1,172 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import {
+  ActionType,
+  DisplayableAction,
+  ClientSpecificAction
+} from '../ActionType'
+import { EventIndex } from '../EventIndex'
+import { EventStatus } from '../EventMetadata'
+import { Flag, InherentFlags } from '../Flag'
+
+const AVAILABLE_ACTIONS_BY_EVENT_STATUS = {
+  [EventStatus.enum.CREATED]: [
+    ActionType.READ,
+    ActionType.DECLARE,
+    ActionType.NOTIFY,
+    ActionType.DELETE,
+    ActionType.CUSTOM
+  ],
+  [EventStatus.enum.NOTIFIED]: [
+    ActionType.READ,
+    ActionType.EDIT,
+    ActionType.DELETE,
+    ActionType.MARK_AS_DUPLICATE,
+    ActionType.ARCHIVE,
+    ActionType.REJECT,
+    ActionType.CUSTOM
+  ],
+  [EventStatus.enum.DECLARED]: [
+    ActionType.READ,
+    ActionType.REGISTER,
+    ActionType.MARK_AS_DUPLICATE,
+    ActionType.ARCHIVE,
+    ActionType.REJECT,
+    ActionType.CUSTOM,
+    ActionType.EDIT,
+    // Niger : tant qu'un acte n'est pas encore enregistré, l'agent de
+    // saisie, l'agent vérificateur et l'OEC peuvent tous le modifier ET le
+    // supprimer — seul l'enregistrement fige l'acte (au-delà, seule une
+    // correction via l'agent vérificateur, à la demande du tribunal ou
+    // autre, permet de le modifier).
+    ActionType.DELETE
+  ],
+  [EventStatus.enum.REGISTERED]: [
+    ActionType.READ,
+    ActionType.PRINT_CERTIFICATE,
+    ActionType.REQUEST_CORRECTION,
+    ActionType.APPROVE_CORRECTION,
+    ActionType.REJECT_CORRECTION,
+    ActionType.CUSTOM,
+    ClientSpecificAction.REVIEW_CORRECTION_REQUEST
+  ],
+  [EventStatus.enum.ARCHIVED]: [
+    ActionType.READ,
+    ActionType.CUSTOM,
+    ActionType.UNARCHIVE
+  ]
+} as const satisfies Record<
+  EventStatus,
+  Exclude<
+    DisplayableAction,
+    typeof ActionType.ASSIGN | typeof ActionType.UNASSIGN
+  >[]
+>
+
+const ACTION_FILTERS: {
+  [K in DisplayableAction]?: (flags: Flag[]) => boolean
+} = {
+  [ActionType.PRINT_CERTIFICATE]: (flags) =>
+    !flags.includes(InherentFlags.CORRECTION_REQUESTED) &&
+    !flags.some((flag) => flag.endsWith(':requested')),
+  [ActionType.REQUEST_CORRECTION]: (flags) =>
+    !flags.includes(InherentFlags.CORRECTION_REQUESTED) &&
+    !flags.some((flag) => flag.endsWith(':requested')),
+  [ClientSpecificAction.REVIEW_CORRECTION_REQUEST]: (flags) =>
+    flags.includes(InherentFlags.CORRECTION_REQUESTED) &&
+    !flags.some((flag) => flag.endsWith(':requested')),
+  [ActionType.APPROVE_CORRECTION]: (flags) =>
+    flags.includes(InherentFlags.CORRECTION_REQUESTED) &&
+    !flags.some((flag) => flag.endsWith(':requested')),
+  [ActionType.REJECT_CORRECTION]: (flags) =>
+    flags.includes(InherentFlags.CORRECTION_REQUESTED) &&
+    !flags.some((flag) => flag.endsWith(':requested')),
+  [ActionType.MARK_AS_DUPLICATE]: (flags) =>
+    flags.includes(InherentFlags.POTENTIAL_DUPLICATE) &&
+    !flags.some((flag) => flag.endsWith(':requested')),
+  [ActionType.EDIT]: (flags) =>
+    !flags.includes(InherentFlags.POTENTIAL_DUPLICATE) &&
+    !flags.some((flag) => flag.endsWith(':requested')),
+  [ActionType.REGISTER]: (flags) =>
+    !flags.includes(InherentFlags.POTENTIAL_DUPLICATE) &&
+    !flags.some((flag) => flag.endsWith(':requested')),
+  [ActionType.REJECT]: (flags) =>
+    !flags.includes(InherentFlags.REJECTED) &&
+    !flags.some((flag) => flag.endsWith(':requested')),
+  [ActionType.ARCHIVE]: (flags) =>
+    !flags.some((flag) => flag.endsWith(':requested')),
+  [ActionType.UNARCHIVE]: (flags) =>
+    !flags.some((flag) => flag.endsWith(':requested')),
+  [ActionType.ASSIGN]: (flags) =>
+    !flags.some((flag) => flag.endsWith(':requested')),
+  [ActionType.UNASSIGN]: (flags) =>
+    !flags.some((flag) => flag.endsWith(':requested')),
+  [ActionType.CUSTOM]: (flags) =>
+    !flags.some((flag) => flag.endsWith(':requested'))
+}
+
+/**
+ * Filters actions based on flags
+ * Some actions can be performed only if certain flags are
+ * present and others only if certain flags are absent
+ */
+export function filterActionsByFlags(
+  actions: DisplayableAction[],
+  flags: Flag[]
+): DisplayableAction[] {
+  return actions.filter((action) => ACTION_FILTERS[action]?.(flags) ?? true)
+}
+
+/**
+ * A rejected record has a specific set of core actions that are available to it.
+ *
+ * This list of actions only applies while the record is still active. Once it has
+ * been archived it must behave like any other archived record: it cannot be
+ * edited or archived again, so we fall through to the status-based actions.
+ *
+ * At some point we will refactor 'Rejected' to be a countryconfig flag, at
+ * which point we can remove this special case.
+ */
+const REJECTED_ACTIONS: DisplayableAction[] = [
+  ActionType.READ,
+  ActionType.NOTIFY,
+  ActionType.CUSTOM,
+  ActionType.EDIT,
+  ActionType.ARCHIVE
+]
+
+function getAvailableActionsWithoutFlagFilters(
+  status: EventStatus,
+  flags: Flag[]
+): DisplayableAction[] {
+  // A record should never stay in the EDIT_IN_PROGRESS flag, since it should always be declared or registered right after
+  if (flags.includes(InherentFlags.EDIT_IN_PROGRESS)) {
+    return [ActionType.NOTIFY, ActionType.DECLARE, ActionType.REGISTER]
+  }
+
+  if (
+    flags.includes(InherentFlags.REJECTED) &&
+    status !== EventStatus.enum.ARCHIVED
+  ) {
+    return REJECTED_ACTIONS
+  }
+
+  return AVAILABLE_ACTIONS_BY_EVENT_STATUS[status]
+}
+
+export function getAvailableActionsForEvent(
+  event: EventIndex
+): DisplayableAction[] {
+  return filterActionsByFlags(
+    getAvailableActionsWithoutFlagFilters(event.status, event.flags),
+    event.flags
+  )
+}

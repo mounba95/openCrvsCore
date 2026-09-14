@@ -1,0 +1,140 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+/**
+ * TemplateConfig defines configuration rules for system-based variables (e.g. $user.role).
+ * They are currently used for providing default values in FieldConfig.
+ */
+
+import { UUID } from '../uuid'
+import { FieldValue } from './FieldValue'
+
+/**
+ * Available system variables for configuration.
+ */
+export type SystemVariables = {
+  user: {
+    id: string
+    name?: string
+    role?: string
+    firstname?: string
+    middlename?: string
+    surname?: string
+    primaryOfficeId?: UUID
+    fullHonorificName?: string
+    administrativeAreaId?: UUID
+    device?: string
+    avatar?: string
+    signature?: string
+  }
+  $window: {
+    location: {
+      href: string
+      pathname: string
+      hostname: string
+      originPathname: string
+    }
+  }
+}
+
+/**
+ * Resolves `window().location.get('href')` to `window.location.href` to allow us to 1) type check system variables 2) change the implementation later if needed
+ */
+export const window = () => ({
+  location: {
+    get: (key: 'href' | 'pathname' | 'hostname' | 'originPathname') => {
+      return `$window.location.${key}`
+    }
+  }
+})
+
+/**
+ * Recursively flatten the keys of an object. Used to limit types when configuring default values in country config.
+ * @example
+ * type Test = FlattenedKeyStrings<{ a: { b: string, c: { d: string } } }>
+ * // 'a.b' | 'a.c.d' but not 'a' or 'a.c'
+ */
+type FlattenedKeyStrings<T, Prefix extends string = ''> = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [K in keyof T]: T[K] extends Record<string, any>
+    ? FlattenedKeyStrings<T[K], `${Prefix}${K & string}.`>
+    : `${Prefix}${K & string}`
+}[keyof T]
+
+export type FlattenenedSystemVariables = FlattenedKeyStrings<SystemVariables>
+
+/**
+ * Default value for a field when configuring a form.
+ */
+export type FieldConfigDefaultValue =
+  | FieldValue
+  | FlattenenedSystemVariables
+  | Record<string, FlattenenedSystemVariables | FieldValue>
+
+export function isTemplateVariable(
+  value: FieldConfigDefaultValue
+): value is FlattenenedSystemVariables {
+  return typeof value === 'string' && (value as string).startsWith('$')
+}
+
+export function isFieldValue(
+  value: FieldConfigDefaultValue
+): value is FieldValue {
+  return FieldValue.safeParse(value).success
+}
+
+/**
+ * Checks if given value is valid for a field, and known template variables are already resolved.
+ * @todo: Extend functionality to arbitrary depth objects. Currently only checks first level since our compoosite fields are only 1 level deep.
+ */
+export function isFieldValueWithoutTemplates(
+  value: FieldConfigDefaultValue
+): value is FieldValue {
+  if (isTemplateVariable(value)) {
+    return false
+  }
+
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    Object.values(value).some((val) => isTemplateVariable(val))
+  ) {
+    return false
+  }
+
+  return true
+}
+
+export function isFieldConfigDefaultValue(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  value: any
+): value is FieldConfigDefaultValue {
+  if (!value) {
+    return false
+  }
+
+  if (isFieldValue(value)) {
+    return true
+  }
+
+  if (isTemplateVariable(value)) {
+    return true
+  }
+
+  if (
+    typeof value === 'object' &&
+    Object.values(value).every((v) => typeof v === 'object' && v !== null)
+  ) {
+    return Object.values(value).every((v) => isFieldConfigDefaultValue(v))
+  }
+
+  return false
+}

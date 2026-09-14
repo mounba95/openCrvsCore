@@ -1,0 +1,115 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import type { Meta, StoryObj } from '@storybook/react'
+import { userEvent, within, expect } from '@storybook/test'
+import React from 'react'
+import styled from 'styled-components'
+import { FieldType } from '@opencrvs/commons/client'
+import {
+  FormFieldGenerator,
+  FormFieldGeneratorPropsWithoutRef
+} from '@client/v2-events/components/forms/FormFieldGenerator'
+import { TRPCProvider } from '@client/v2-events/trpc'
+import { padZero } from '@client/v2-events/utils'
+import { withValidatorContext } from '../../../../../.storybook/decorators'
+
+const meta: Meta<FormFieldGeneratorPropsWithoutRef> = {
+  title: 'Inputs/DateField',
+  decorators: [
+    (Story, context) => (
+      <TRPCProvider>
+        <Story {...context} />
+      </TRPCProvider>
+    ),
+    withValidatorContext
+  ]
+}
+
+export default meta
+
+const StyledFormFieldGenerator = styled(FormFieldGenerator)`
+  width: 400px;
+`
+
+type Story = StoryObj<FormFieldGeneratorPropsWithoutRef>
+
+export const DateInput: Story = {
+  parameters: {
+    layout: 'centered'
+  },
+  play: async ({ canvasElement, step }) => {
+    await step('Shows default value & errors based on state', async () => {
+      const canvas = within(canvasElement)
+
+      const today = new Date()
+      const year = today.getFullYear()
+      const month = padZero(today.getMonth() + 1)
+      const day = padZero(today.getDate())
+
+      const dayInput = (await canvas.findByTestId(
+        'storybook____date-dd'
+      )) as HTMLInputElement
+
+      const monthInput = (await canvas.findByTestId(
+        'storybook____date-mm'
+      )) as HTMLInputElement
+
+      const yearInput = (await canvas.findByTestId(
+        'storybook____date-yyyy'
+      )) as HTMLInputElement
+
+      void expect(dayInput.value).toBe(day)
+      void expect(monthInput.value).toBe(month)
+      void expect(yearInput.value).toBe(String(year))
+
+      await userEvent.clear(dayInput)
+      await userEvent.clear(monthInput)
+      await userEvent.clear(yearInput)
+
+      await userEvent.type(dayInput, '1')
+
+      await userEvent.click(await canvas.findByText('Date input'))
+
+      await canvas.findByText('Invalid date field')
+
+      await userEvent.type(dayInput, '{backspace}')
+
+      await userEvent.click(await canvas.findByText('Date input'))
+
+      await canvas.findByText('Required')
+    })
+  },
+  render: function Component(args) {
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={[
+          {
+            id: 'storybook.date',
+            type: FieldType.DATE,
+            // value of now() will be resolve to { $$now: true }
+            defaultValue: {
+              $$now: true
+            },
+            label: {
+              id: 'storybook.date.label',
+              defaultMessage: 'Date input',
+              description: 'The title for the date input'
+            },
+            required: true
+          }
+        ]}
+        id="my-form"
+      />
+    )
+  }
+}

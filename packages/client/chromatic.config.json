@@ -1,0 +1,7 @@
+{
+  "onlyChanged": true,
+  "projectId": "Project:67862a3f4457d14c317e5cca",
+  "storybookBaseDir": "packages/client",
+  "zip": true,
+  "untraced": ["decorators.tsx", "**/decorators.tsx"]
+}

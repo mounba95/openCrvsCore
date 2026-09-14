@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "paths": {
+      "@auth/*": ["./src/*"],
+      "@events/*": ["../events/src/*"]
+    },
+    "target": "es6",
+    "module": "node16",
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "outDir": "build/dist",
+    "sourceMap": true,
+    "moduleResolution": "node16",
+    "rootDir": ".",
+    "lib": ["esnext.asynciterable", "es6", "es2019", "DOM.Iterable", "es2021"],
+    "forceConsistentCasingInFileNames": true,
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noUnusedLocals": true,
+    "types": ["jest"]
+  },
+  "include": ["resources/**/*.ts", "src/**/*.ts", "typings", "test/setupJest.ts"],
+  "exclude": [
+    "node_modules",
+    "build",
+    "scripts",
+    "acceptance-tests",
+    "src/setupTests.ts"
+  ]
+}

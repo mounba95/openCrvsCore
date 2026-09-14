@@ -1,0 +1,431 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import * as React from 'react'
+import {
+  defineMessages,
+  MessageDescriptor,
+  WrappedComponentProps as IntlShapeProps,
+  injectIntl
+} from 'react-intl'
+import {
+  formMessages as messages,
+  buttonMessages,
+  constantsMessages
+} from '@client/i18n/messages'
+import styled from 'styled-components'
+import {
+  Icon,
+  InputError,
+  TextInput,
+  Select,
+  Frame,
+  AppBar,
+  Button
+} from '@opencrvs/components'
+import { find, at } from 'lodash'
+import {
+  ProtectedAccoutStep,
+  IProtectedAccountSetupData,
+  ISecurityQuestionAnswer
+} from '@client/components/ProtectedAccount'
+import { Content, ContentSize } from '@opencrvs/components/lib/Content'
+
+export const SECURITY_QUESTION_KEYS = [
+  'BIRTH_TOWN',
+  'HIGH_SCHOOL',
+  'MOTHER_NAME',
+  'FAVORITE_TEACHER',
+  'FAVORITE_MOVIE',
+  'FAVORITE_SONG',
+  'FAVORITE_FOOD',
+  'FIRST_CHILD_NAME'
+] as const
+
+export type SecurityQuestionKey = (typeof SECURITY_QUESTION_KEYS)[number]
+
+export const securityQuestionMessages: Record<
+  SecurityQuestionKey,
+  MessageDescriptor
+> = defineMessages({
+  BIRTH_TOWN: {
+    defaultMessage: 'What city were you born in?',
+    description: 'The description for BIRTH_TOWN key',
+    id: 'userSetup.securityQuestions.birthTown'
+  },
+  HIGH_SCHOOL: {
+    defaultMessage: 'What is the name of your high school?',
+    description: 'The description for HIGH_SCHOOL key',
+    id: 'userSetup.securityQuestions.hightSchool'
+  },
+  MOTHER_NAME: {
+    defaultMessage: "What is your mother's name?",
+    description: 'The description for MOTHER_NAME key',
+    id: 'userSetup.securityQuestions.motherName'
+  },
+  FAVORITE_TEACHER: {
+    defaultMessage: 'What is the name of your favorite school teacher?',
+    description: 'The description for FAVORITE_TEACHER key',
+    id: 'userSetup.securityQuestions.favoriteTeacher'
+  },
+  FAVORITE_MOVIE: {
+    defaultMessage: 'What is your favorite movie?',
+    description: 'The description for FAVORITE_MOVIE key',
+    id: 'userSetup.securityQuestions.favoriteMovie'
+  },
+  FAVORITE_SONG: {
+    defaultMessage: 'What is your favorite song?',
+    description: 'The description for FAVORITE_SONG key',
+    id: 'userSetup.securityQuestions.favoriteSong'
+  },
+  FAVORITE_FOOD: {
+    defaultMessage: 'What is your favorite food?',
+    description: 'The description for FAVORITE_FOOD key',
+    id: 'userSetup.securityQuestions.favoriteFood'
+  },
+  FIRST_CHILD_NAME: {
+    defaultMessage: "What is your first child's name?",
+    description: 'The description for FIRST_CHILD_NAME key',
+    id: 'userSetup.securityQuestions.firstChildName'
+  }
+})
+
+export function isSecurityQuestionKey(key: string): key is SecurityQuestionKey {
+  return (SECURITY_QUESTION_KEYS as readonly string[]).includes(key)
+}
+
+const EMPTY_VALUE = ''
+const VISIBLE_QUESTION = 3
+
+type IProps = {
+  setupData: IProtectedAccountSetupData
+  goToStep: (
+    step: ProtectedAccoutStep,
+    data: IProtectedAccountSetupData
+  ) => void
+} & IntlShapeProps
+
+type IQuestion = {
+  label: string
+  value: string
+}
+
+type IQuestionnaire = {
+  questionList: IQuestion[]
+  selectedQuestion: string
+  answer: string
+}
+
+type IState = {
+  questionnaire: IQuestionnaire[]
+  refresher: number
+  showError: boolean
+}
+
+const QuestionWrapper = styled.div`
+  margin-bottom: 66px;
+  ${({ theme }) => theme.fonts.reg16};
+`
+const Wrapper = styled.div`
+  display: flex;
+  flex-flow: column;
+  margin-bottom: 20px;
+`
+const Label = styled.label`
+  ${({ theme }) => theme.fonts.reg18};
+  margin: 0 0 6px 0;
+`
+
+const FullWidthSelect = styled(Select)`
+  width: 70%;
+  @media (max-width: ${({ theme }) => theme.grid.breakpoints.md}px) {
+    width: 100%;
+  }
+`
+const FullWidthInput = styled(TextInput)`
+  width: 70%;
+  @media (max-width: ${({ theme }) => theme.grid.breakpoints.md}px) {
+    width: 100%;
+  }
+`
+const Error = styled.span`
+  color: ${({ theme }) => theme.colors.negative};
+  ${({ theme }) => theme.fonts.reg12};
+`
+
+class SecurityQuestionView extends React.Component<IProps, IState> {
+  constructor(props: IProps) {
+    super(props)
+
+    this.state = {
+      questionnaire: this.prepareQuestionnaire(),
+      refresher: Date.now(),
+      showError: false
+    }
+  }
+
+  componentDidMount = () => {
+    this.removeDuplicateQuestions()
+  }
+
+  getQuestionList = (): IQuestion[] => {
+    return SECURITY_QUESTION_KEYS.map((value) => ({
+      value,
+      label: this.props.intl.formatMessage(securityQuestionMessages[value])
+    }))
+  }
+
+  prepareQuestionnaire = (): IQuestionnaire[] => {
+    let i
+    const questionnaire: IQuestionnaire[] = []
+    for (i = 0; i < VISIBLE_QUESTION; i++) {
+      const selectedQuestion =
+        at(
+          this.props,
+          `setupData.securityQuestionAnswers.${i}.questionKey`
+        )[0] || EMPTY_VALUE
+      const selectedAnswer =
+        at(this.props, `setupData.securityQuestionAnswers.${i}.answer`)[0] ||
+        EMPTY_VALUE
+
+      questionnaire.push({
+        questionList: this.getQuestionList(),
+        selectedQuestion: selectedQuestion,
+        answer: selectedAnswer
+      } as IQuestionnaire)
+    }
+    return questionnaire
+  }
+
+  removeDuplicateQuestions = (): void => {
+    const questionnaire = this.state.questionnaire
+    this.state.questionnaire.forEach(
+      (iquestionnaire: IQuestionnaire, index: number) => {
+        questionnaire[index].questionList = this.getQuestionList().filter(
+          (question: IQuestion) => {
+            return (
+              iquestionnaire.selectedQuestion === question.value ||
+              !find(questionnaire, { selectedQuestion: question.value })
+            )
+          }
+        )
+      }
+    )
+
+    this.setState({ questionnaire })
+  }
+
+  onQuestionSelect = (value: string, index: number): void => {
+    const questionnaire = this.state.questionnaire
+    questionnaire[index].selectedQuestion = value
+
+    questionnaire.map((elem: IQuestionnaire, key: number) => {
+      const answeredQuestions: IQuestion[] = []
+
+      questionnaire.forEach((questionnaire: IQuestionnaire, nkey: number) => {
+        if (
+          (index === key && index === nkey) ||
+          elem.selectedQuestion === questionnaire.selectedQuestion
+        )
+          return
+        answeredQuestions.push({
+          value: questionnaire.selectedQuestion,
+          label: questionnaire.selectedQuestion
+        })
+      })
+
+      const newQuestionList: IQuestion[] = []
+      this.getQuestionList().forEach((value: IQuestion) => {
+        if (find(answeredQuestions, { value: value.value })) return
+        newQuestionList.push(value)
+      })
+
+      elem.questionList = newQuestionList
+      return elem
+    })
+
+    this.setState(() => ({
+      questionnaire,
+      refresher: Date.now()
+    }))
+  }
+
+  onAnswerChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+    index: number
+  ): void => {
+    const questionnaire = this.state.questionnaire
+    questionnaire[index].answer = event.target.value
+    this.setState({ questionnaire })
+  }
+
+  isValidate = (): boolean => {
+    let isValid = true
+    this.state.questionnaire.forEach((questionnaire: IQuestionnaire) => {
+      if (!questionnaire.selectedQuestion || !questionnaire.answer) {
+        isValid = false
+        return
+      }
+    })
+    return isValid
+  }
+
+  prepareSetupData = (): ISecurityQuestionAnswer[] => {
+    return this.state.questionnaire.map((questionnaire: IQuestionnaire) => ({
+      questionKey: questionnaire.selectedQuestion,
+      answer: questionnaire.answer
+    }))
+  }
+
+  onsubmit = (
+    e:
+      | React.FormEvent<HTMLFormElement>
+      | React.MouseEvent<HTMLButtonElement, MouseEvent>
+  ) => {
+    e.preventDefault()
+    this.setState({ showError: true })
+    this.props.setupData.securityQuestionAnswers = this.prepareSetupData()
+
+    if (this.isValidate()) {
+      this.props.goToStep(ProtectedAccoutStep.REVIEW, this.props.setupData)
+    }
+  }
+
+  showQuestionnaire = () => {
+    const { intl } = this.props
+    return (
+      <form onSubmit={this.onsubmit} key={this.state.refresher}>
+        {this.state.questionnaire.map(
+          (questionnaire: IQuestionnaire, index: number) => {
+            return (
+              <QuestionWrapper id={`question-${index}-wrapper`} key={index}>
+                <Wrapper>
+                  <Label>
+                    {intl.formatMessage(messages.securityQuestionLabel, {
+                      count: index + 1
+                    })}
+                    <Error>*</Error>
+                  </Label>
+                  <FullWidthSelect
+                    id={`question-${index}`}
+                    onChange={(value: string) =>
+                      this.onQuestionSelect(value, index)
+                    }
+                    value={questionnaire.selectedQuestion}
+                    options={questionnaire.questionList}
+                    placeholder={intl.formatMessage(messages.select)}
+                    error={
+                      this.state.showError && !questionnaire.selectedQuestion
+                    }
+                    touched={this.state.showError}
+                  />
+                  {this.state.showError && !questionnaire.selectedQuestion && (
+                    <InputError id={`question-${index}-validation-message`}>
+                      {intl.formatMessage(messages.selectSecurityQuestion)}
+                    </InputError>
+                  )}
+                </Wrapper>
+                <Wrapper>
+                  <Label>
+                    {intl.formatMessage(messages.answer)}
+                    <Error>*</Error>
+                  </Label>
+                  <FullWidthInput
+                    id={`answer-${index}`}
+                    onChange={(answer: React.ChangeEvent<HTMLInputElement>) =>
+                      this.onAnswerChange(answer, index)
+                    }
+                    value={this.state.questionnaire[index].answer}
+                    error={
+                      this.state.showError &&
+                      !this.state.questionnaire[index].answer
+                    }
+                    touched={this.state.showError}
+                  />
+                  {this.state.showError &&
+                    !this.state.questionnaire[index].answer && (
+                      <InputError id={`answer-${index}-validation-message`}>
+                        {intl.formatMessage(messages.enterResponse)}
+                      </InputError>
+                    )}
+                </Wrapper>
+              </QuestionWrapper>
+            )
+          }
+        )}
+
+        <Button
+          id="submit-security-question"
+          type="primary"
+          size="large"
+          fullWidth
+          onClick={this.onsubmit}
+        >
+          {intl.formatMessage(buttonMessages.continueButton)}
+        </Button>
+      </form>
+    )
+  }
+
+  render() {
+    const { intl, goToStep, setupData } = this.props
+    const title = intl.formatMessage(messages.userFormSecurityQuestionsTitle)
+    return (
+      <Frame
+        skipToContentText={intl.formatMessage(
+          constantsMessages.skipToMainContent
+        )}
+        header={
+          <AppBar
+            desktopLeft={
+              <Button
+                aria-label="Go back"
+                size="medium"
+                type="icon"
+                onClick={() =>
+                  goToStep(ProtectedAccoutStep.PASSWORD, setupData)
+                }
+              >
+                <Icon name="ArrowLeft" />
+              </Button>
+            }
+            mobileLeft={
+              <Button
+                aria-label="Go back"
+                size="medium"
+                type="icon"
+                onClick={() =>
+                  goToStep(ProtectedAccoutStep.PASSWORD, setupData)
+                }
+              >
+                <Icon name="ArrowLeft" />
+              </Button>
+            }
+            desktopTitle={title}
+            mobileTitle={title}
+          />
+        }
+      >
+        <Content
+          size={ContentSize.SMALL}
+          title={intl.formatMessage(messages.userFormSecurityQuestionsHeading)}
+          subtitle={intl.formatMessage(
+            messages.userFormSecurityQuestionsDescription
+          )}
+          showTitleOnMobile
+        >
+          {this.showQuestionnaire()}
+        </Content>
+      </Frame>
+    )
+  }
+}
+
+export const SecurityQuestion = injectIntl(SecurityQuestionView)

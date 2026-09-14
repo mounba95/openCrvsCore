@@ -1,0 +1,233 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import { renderHook, RenderHookResult, waitFor } from '@testing-library/react'
+import React, { PropsWithChildren } from 'react'
+
+import { TRPCError } from '@trpc/server'
+import { createTRPCMsw, httpLink } from '@vafanassieff/msw-trpc'
+import { http, HttpResponse, HttpResponseResolver } from 'msw'
+import { setupServer } from 'msw/node'
+import { Provider } from 'react-redux'
+import superjson, { serialize } from 'superjson'
+import { vi } from 'vitest'
+import {
+  ActionStatus,
+  ActionType,
+  EventDocument,
+  EventInput,
+  getUUID,
+  TENNIS_CLUB_MEMBERSHIP,
+  tennisClubMembershipEvent,
+  UUID
+} from '@opencrvs/commons/client'
+import { AppRouter, queryClient, TRPCProvider } from '@client/v2-events/trpc'
+import { storage } from '@client/storage'
+import { createTestStore } from '@client/tests/util'
+import { checkAuth } from '@client/profile/profileActions'
+import { useEvents } from './useEvents'
+
+const serverSpy = vi.fn()
+
+function trpcHandler(
+  fn: HttpResponseResolver<never, EventInput, EventDocument>
+): HttpResponseResolver<never, EventInput, EventDocument> {
+  async function wrapHttpResponseJson<T extends HttpResponse>(response: T) {
+    const jsonBody = await response.json()
+    return HttpResponse.json({
+      result: { data: serialize(jsonBody), type: 'data' }
+    })
+  }
+
+  return (async (options) => {
+    const body = (await options.request.json()) as unknown as {
+      json: EventInput
+    }
+    options.request.json = async () => Promise.resolve(body.json)
+    const response = (await fn(options)) as HttpResponse
+    return wrapHttpResponseJson(response)
+  }) as HttpResponseResolver<never, EventInput, EventDocument>
+}
+
+const createHandler = trpcHandler(async ({ request }) => {
+  serverSpy({ url: request.url, method: request.method })
+  await new Promise((resolve) => setTimeout(resolve, 1000))
+
+  return HttpResponse.json({
+    type: TENNIS_CLUB_MEMBERSHIP,
+    id: '_REAL_UUID_' as UUID,
+    trackingId: 'TEST12',
+    createdAt: new Date('2024-12-05T18:37:31.295Z').toISOString(),
+    updatedAt: new Date('2024-12-05T18:37:31.295Z').toISOString(),
+    actions: [
+      {
+        type: ActionType.CREATE,
+        id: '_REAL_ACTION_UUID_' as UUID,
+        createdAt: new Date('2024-12-05T18:37:31.295Z').toISOString(),
+        createdByUserType: 'user',
+        createdBy: '6733309827b97e6483877188',
+        createdByRole: 'some-user-role',
+        createdAtLocation: 'ae5be1bb-6c50-4389-a72d-4c78d19ec176' as UUID,
+        declaration: {},
+        status: ActionStatus.Accepted,
+        transactionId: getUUID()
+      }
+    ]
+  })
+})
+
+function errorHandler() {
+  return new HttpResponse(
+    JSON.stringify({
+      error: {
+        json: new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR'
+        })
+      }
+    }),
+    {
+      status: 500
+    }
+  )
+}
+
+const tRPCMsw = createTRPCMsw<AppRouter>({
+  links: [
+    httpLink({
+      url: '/api/events'
+    })
+  ],
+  transformer: { input: superjson, output: superjson }
+})
+const server = setupServer(
+  http.post<never, EventInput, EventDocument>(
+    '/api/events/event.create',
+    createHandler
+  ),
+
+  tRPCMsw.event.config.get.query(() => {
+    return [tennisClubMembershipEvent]
+  }),
+
+  tRPCMsw.administrativeAreas.list.query(() => [])
+)
+
+beforeAll(() => server.listen())
+afterEach(() => server.resetHandlers())
+afterAll(() => server.close())
+
+interface TestContext {
+  eventsHook: RenderHookResult<ReturnType<typeof useEvents>, {}>
+  createEventHook: RenderHookResult<
+    ReturnType<ReturnType<typeof useEvents>['createEvent']>,
+    {}
+  >
+  declareHook: RenderHookResult<
+    ReturnType<typeof useEvents>['actions']['declare'],
+    {}
+  >
+  wrapper: ({ children }: PropsWithChildren) => React.JSX.Element
+}
+
+function makeWrapper(
+  store: Awaited<ReturnType<typeof createTestStore>>['store']
+) {
+  return function wrapper({ children }: PropsWithChildren) {
+    return (
+      <Provider store={store}>
+        <TRPCProvider waitForClientRestored={false}>{children}</TRPCProvider>
+      </Provider>
+    )
+  }
+}
+
+beforeEach<TestContext>(async (testContext) => {
+  const { store } = await createTestStore()
+  store.dispatch(checkAuth())
+  const wrapper = makeWrapper(store)
+  queryClient.clear()
+  serverSpy.mockClear()
+  await storage.removeItem('events')
+  await storage.removeItem('reactQuery')
+
+  const eventsHook = renderHook(() => useEvents(), { wrapper })
+
+  await waitFor(() => expect(eventsHook.result.current).not.toBeNull(), {
+    timeout: 3000
+  })
+  const createHook = renderHook(() => eventsHook.result.current.createEvent(), {
+    wrapper
+  })
+
+  const declareHookHook = renderHook(
+    () => eventsHook.result.current.actions.declare,
+    {
+      wrapper
+    }
+  )
+
+  testContext.eventsHook = eventsHook
+  testContext.declareHook = declareHookHook
+  testContext.createEventHook = createHook
+  testContext.wrapper = wrapper
+})
+
+describe('events that have unsynced actions', () => {
+  test<TestContext>('creating a record first stores it locally with a temporary id', async ({
+    createEventHook,
+    wrapper
+  }) => {
+    server.use(http.post('/api/events/event.create', errorHandler))
+
+    await Promise.resolve(
+      createEventHook.result.current.mutate({
+        type: TENNIS_CLUB_MEMBERSHIP,
+        transactionId: '_TEST_TRANSACTION_'
+      })
+    )
+
+    const getHook = renderHook(
+      () => useEvents().getEvent.useFindEventFromCache('_TEST_TRANSACTION_'),
+      { wrapper }
+    )
+
+    // Expect data store now to contain one event
+    await waitFor(() => {
+      expect(getHook.result.current.data).toBeTruthy()
+    })
+  })
+
+  test<TestContext>('temporary id is replaced with the real id when the event is synced to the backend', async ({
+    createEventHook,
+    wrapper
+  }) => {
+    await createEventHook.result.current.mutateAsync({
+      type: TENNIS_CLUB_MEMBERSHIP,
+      transactionId: '_TEST_TRANSACTION_'
+    })
+    // Wait for backend to sync
+    await waitFor(() =>
+      expect(serverSpy).toHaveBeenCalledWith({
+        url: 'http://localhost:3000/api/events/event.create',
+        method: 'POST'
+      })
+    )
+
+    const getHook = renderHook(
+      () => useEvents().getEvent.useFindEventFromCache('_REAL_UUID_'),
+      { wrapper }
+    )
+
+    // Expect data store now to contain one event
+    await waitFor(() => {
+      expect(getHook.result.current.data).toBeTruthy()
+    })
+  })
+})

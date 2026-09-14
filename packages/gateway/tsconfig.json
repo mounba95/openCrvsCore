@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "skipLibCheck": true,
+    "paths": {
+      "@gateway/*": ["./src/*"],
+      "@events/*": ["../events/src/*"]
+    },
+    "target": "es6",
+    "module": "node16",
+    "outDir": "build/dist",
+    "sourceMap": true,
+    "moduleResolution": "node16",
+    "rootDir": ".",
+    "lib": ["esnext.asynciterable", "es6", "es2019", "DOM.Iterable", "es2021"],
+    "forceConsistentCasingInFileNames": true,
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "allowSyntheticDefaultImports": true,
+    "noUnusedLocals": true,
+    "types": ["jest"],
+    "esModuleInterop": true
+  },
+  "include": ["src/**/*.ts", "typings", "test/setupJest.ts"],
+  "exclude": ["node_modules", "build", "scripts", "acceptance-tests"]
+}

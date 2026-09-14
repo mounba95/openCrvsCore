@@ -1,0 +1,147 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+export const messages = {
+  user: {
+    defaultMessage: 'User',
+    description: 'The name of the user form',
+    id: 'constants.user'
+  },
+  userFormTitle: {
+    defaultMessage: 'Create new user',
+    description: 'The title of user form',
+    id: 'form.section.user.title'
+  },
+  userFormReviewTitle: {
+    defaultMessage: 'Please review the new users details',
+    description: 'The title of the review page of the user form',
+    id: 'form.section.user.preview.title'
+  },
+  registrationOffice: {
+    defaultMessage: 'Registration Office',
+    description: 'Registration office',
+    id: 'form.field.label.registrationOffice'
+  },
+  registrationOfficeInstruction: {
+    defaultMessage: 'Search and add every office this user should have access to.',
+    description: 'Instruction for the multi-office picker on the user form',
+    id: 'form.field.instruction.registrationOffice'
+  },
+  primaryOffice: {
+    defaultMessage: 'primary',
+    description: 'Label shown next to the first office added, marking it as the primary/home office',
+    id: 'form.field.label.primaryOffice'
+  },
+  userDetails: {
+    defaultMessage: 'User details',
+    description: 'User details section',
+    id: 'form.section.userDetails'
+  },
+  firstName: {
+    defaultMessage: "User's first name",
+    description: "User's English first name",
+    id: 'form.field.label.userFirstName'
+  },
+  lastName: {
+    defaultMessage: "User's surname",
+    description: "User's English surname",
+    id: 'form.field.label.userSurname'
+  },
+  fullName: {
+    defaultMessage: "User's full name",
+    description: "User's full English name",
+    id: 'form.field.label.userFullName'
+  },
+  phoneNumber: {
+    defaultMessage: 'Phone number',
+    description: 'Input label for phone input',
+    id: 'form.field.label.phoneNumber'
+  },
+  email: {
+    defaultMessage: 'Email',
+    description: 'Input label for email address',
+    id: 'form.field.label.email'
+  },
+  fullHonorificName: {
+    defaultMessage: 'Full Honorific Name',
+    description: 'Input label for full honorific name',
+    id: 'form.field.label.fullHonorificName'
+  },
+  labelRole: {
+    defaultMessage: 'Role',
+    description: 'Role label',
+    id: 'constants.role'
+  },
+  type: {
+    defaultMessage: 'Type',
+    description: 'Label for type of event in work queue list item',
+    id: 'constants.type'
+  },
+  role: {
+    defaultMessage: 'Role',
+    description: 'Label for role input in user creation',
+    id: 'constants.user.role'
+  },
+  userDevice: {
+    defaultMessage: 'Device',
+    description: 'User device',
+    id: 'form.field.label.userDevice'
+  },
+  userSignatureAttachmentTitle: {
+    defaultMessage: 'Attach the signature',
+    description: 'Title for user signature attachment',
+    id: 'form.field.label.userSignatureAttachmentTitle'
+  },
+  userSignatureAttachment: {
+    defaultMessage: 'User’s signature',
+    description: 'Input label for user signature attachment',
+    id: 'form.field.label.userSignatureAttachment'
+  },
+  creatingNewUser: {
+    defaultMessage: 'Creating new user',
+    description: 'label for creating new user',
+    id: 'form.field.label.creatingNewUser'
+  },
+  updatingUser: {
+    defaultMessage: 'Updating user',
+    description: 'label for updating user',
+    id: 'form.field.label.updatingUser'
+  },
+  changeOfficeWarningTitle: {
+    defaultMessage: 'Change office?',
+    description:
+      'Title for the confirmation dialog when changing a user office',
+    id: 'form.field.label.changeOfficeWarningTitle'
+  },
+  changeOfficeWarningBody: {
+    defaultMessage:
+      "Changing this user's office will remove their in-progress drafts. Do you want to continue?",
+    description: 'Body for the confirmation dialog when changing a user office',
+    id: 'form.field.label.changeOfficeWarningBody'
+  },
+  phoneNumberFormat: {
+    id: 'validations.phoneNumberFormat',
+    defaultMessage: 'Must be a valid 8 digit number',
+    description:
+      'The error message that appears on phone numbers when the length does not match the configured pattern'
+  },
+  createdUsernameTitle: {
+    id: 'form.field.label.createdUsernameTitle',
+    defaultMessage: 'User created',
+    description: 'Title of the dialog shown after a user is created, displaying their username'
+  },
+  createdUsernameBody: {
+    id: 'form.field.label.createdUsernameBody',
+    defaultMessage:
+      'The username for this user is: {username}. Please share it with them, along with the password you set — it will not be sent by email or SMS.',
+    description:
+      'Body of the dialog shown after a user is created, displaying their username'
+  }
+}

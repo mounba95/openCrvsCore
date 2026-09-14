@@ -1,0 +1,87 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import { JWT_ISSUER, WEB_USER_JWT_AUDIENCES } from '@auth/constants'
+import {
+  authenticateSystem,
+  createToken
+} from '@auth/features/authenticate/service'
+import * as Hapi from '@hapi/hapi'
+import { TokenUserType, encodeScope } from '@opencrvs/commons'
+import * as oauthResponse from './responses'
+import { getParam } from './utils'
+
+export async function clientCredentialsHandler(
+  request: Hapi.Request,
+  h: Hapi.ResponseToolkit
+) {
+  const clientId = getParam(request, 'client_id')
+  const clientSecret = getParam(request, 'client_secret')
+
+  if (!clientId || !clientSecret) {
+    return oauthResponse.invalidRequest(h)
+  }
+
+  let result
+  try {
+    result = await authenticateSystem(clientId, clientSecret)
+  } catch (err) {
+    return oauthResponse.invalidClient(h)
+  }
+
+  if (result.status !== 'active') {
+    return oauthResponse.invalidClient(h)
+  }
+
+  /**
+   * Intermediary step to convert any legacy scopes to the new format.
+   * For example, 'record.create' becomes 'type=record.create' to align with the new scope format.
+   *
+   * system_clients.scopes lives in postgres now, so a one-time migration is possible,
+   * but the events integrations API still accepts/returns the legacy string format —
+   * writing a migration now would just have this shim re-convert the API's legacy
+   * input again. Do the migration when that API is updated to accept the v2 format.
+   */
+  const v2Scopes = result.scope.map((s) => {
+    // Intentionally verbose for clarity.
+    if (s === 'record.notify') {
+      return encodeScope({ type: 'record.notify' })
+    }
+
+    if (s === 'record.search') {
+      return encodeScope({ type: 'record.search' })
+    }
+
+    if (s === 'record.read') {
+      return encodeScope({ type: 'record.read' })
+    }
+
+    if (s === 'record.create') {
+      return encodeScope({ type: 'record.create' })
+    }
+
+    if (s === 'record.import') {
+      return encodeScope({ type: 'record.import' })
+    }
+
+    return s
+  })
+
+  const token = await createToken(
+    result.systemId,
+    v2Scopes,
+    WEB_USER_JWT_AUDIENCES,
+    JWT_ISSUER,
+    undefined,
+    TokenUserType.enum.system
+  )
+  return oauthResponse.success(h, token)
+}

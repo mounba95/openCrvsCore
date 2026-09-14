@@ -1,0 +1,89 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import { useIntl, defineMessages } from 'react-intl'
+import { ActionType, TokenUserType } from '@opencrvs/commons/client'
+import { getUsersFullName } from '@client/v2-events/utils'
+import { useUsers } from '@client/v2-events/hooks/useUsers'
+import { formatUserRole } from '@client/v2-events/hooks/useRoles'
+
+const messages = defineMessages({
+  systemDefaultName: {
+    id: 'event.history.systemDefaultName',
+    defaultMessage: 'System integration',
+    description: 'Fallback for system integration name in the event history'
+  },
+  system: {
+    id: 'event.history.system',
+    defaultMessage: 'System',
+    description: 'Name for system initiated actions in the event history'
+  }
+})
+
+export function useUserDetails() {
+  const intl = useIntl()
+  const { getUsers, getSystem } = useUsers()
+  const users = getUsers.getAllCached()
+  const systems = getSystem.getAllCached()
+
+  const getUserDetails = ({
+    createdByUserType,
+    createdBy,
+    type,
+    createdByRole
+  }: {
+    createdByUserType: TokenUserType
+    createdBy: string
+    type: ActionType
+    createdByRole?: string
+  }): {
+    type: 'user' | 'system' | 'integration'
+    name: string
+    role: string | undefined
+  } => {
+    const role = formatUserRole(createdByRole, intl)
+
+    if (type === ActionType.DUPLICATE_DETECTED) {
+      return {
+        type: 'system',
+        name: intl.formatMessage(messages.system),
+        role
+      } as const
+    }
+
+    const user = users.find((u) => u.id === createdBy)
+    const system = systems.find((s) => s.id === createdBy)
+    if (system) {
+      return {
+        type: 'integration',
+        name: system.name,
+        role
+      } as const
+    }
+
+    if (!user) {
+      return {
+        type: 'user',
+        name: 'Missing user',
+        role
+      } as const
+    }
+
+    return {
+      type: 'user',
+      name: getUsersFullName(user.name),
+      role,
+      ...user.name
+    } as const
+  }
+
+  return { getUserDetails }
+}

@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "types": [
+      "vitest/globals"
+    ],
+  },
+  "extends": "./tsconfig.base.json",
+  "include": [
+    "src/**/*.ts",
+    "typings",
+    "tslint-rules"
+  ],
+  "exclude": [
+    "node_modules",
+    "build",
+    "scripts",
+    "acceptance-tests"
+  ]
+}

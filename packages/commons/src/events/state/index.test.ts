@@ -1,0 +1,1700 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import { deepDropNulls, getCurrentEventState } from '.'
+import { tennisClubMembershipEvent } from '../../fixtures'
+import { getUUID, UUID } from '../../uuid'
+import { DocumentPath } from '../../documents'
+import { ActionStatus, EventState } from '../ActionDocument'
+import { ActionType } from '../ActionType'
+import { AddressType } from '../CompositeFieldValue'
+import { EventStatus } from '../EventMetadata'
+import { InherentFlags } from '../Flag'
+import {
+  generateActionDocument,
+  generateEventDocument,
+  generateUuid,
+  TestUserRole
+} from '../test.utils'
+import { EventIndex } from '../EventIndex'
+import { TENNIS_CLUB_MEMBERSHIP } from '../Constants'
+import { TokenUserType } from '../../authentication'
+import { EventDocument } from '../EventDocument'
+
+/* eslint-disable max-lines */
+
+describe('getCurrentEventState()', () => {
+  test('Sets legalStatuses when event has been declared and registered', () => {
+    const event = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        { type: ActionType.CREATE },
+        {
+          type: ActionType.DECLARE
+        },
+        { type: ActionType.REGISTER }
+      ]
+    })
+
+    const state = getCurrentEventState(event, tennisClubMembershipEvent)
+
+    expect(state.legalStatuses[EventStatus.enum.DECLARED]).toEqual({
+      createdAt: event.actions[1].createdAt,
+      createdBy: event.actions[1].createdBy,
+      createdByUserType: event.actions[1].createdByUserType,
+      createdAtLocation: event.actions[1].createdAtLocation,
+      createdByRole: event.actions[1].createdByRole,
+      acceptedAt: event.actions[1].createdAt
+    })
+
+    expect(state.legalStatuses[EventStatus.enum.REGISTERED]).toEqual({
+      createdAt: event.actions[2].createdAt,
+      createdBy: event.actions[2].createdBy,
+      createdByUserType: event.actions[1].createdByUserType,
+      createdAtLocation: event.actions[2].createdAtLocation,
+      createdByRole: event.actions[2].createdByRole,
+      acceptedAt: event.actions[2].createdAt
+    })
+  })
+
+  test('legalStatuses are not set when actions are not accepted', () => {
+    const createAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.CREATE
+    })
+
+    const declarationRequestActions = [
+      ActionType.DECLARE,
+      ActionType.REGISTER
+    ].map((action) =>
+      generateActionDocument({
+        configuration: tennisClubMembershipEvent,
+        action,
+        defaults: {
+          status: ActionStatus.Requested
+        }
+      })
+    )
+
+    const actions = [createAction, ...declarationRequestActions]
+
+    const event = {
+      trackingId: getUUID(),
+      type: tennisClubMembershipEvent.id,
+      actions,
+      createdAt: new Date(Date.now()).toISOString(),
+      id: getUUID(),
+      updatedAt: new Date(Date.now()).toISOString()
+    }
+
+    const state = getCurrentEventState(event, tennisClubMembershipEvent)
+
+    expect(state.legalStatuses[EventStatus.enum.DECLARED]).toBe(undefined)
+
+    expect(state.legalStatuses[EventStatus.enum.REGISTERED]).toBe(undefined)
+  })
+
+  test('legalStatuses are shown when requests have been accepted async', () => {
+    const actions = [
+      generateActionDocument({
+        configuration: tennisClubMembershipEvent,
+        action: ActionType.CREATE
+      }),
+      ...[ActionType.DECLARE, ActionType.REGISTER].flatMap((action, i) => [
+        generateActionDocument({
+          configuration: tennisClubMembershipEvent,
+          action,
+          defaults: {
+            status: ActionStatus.Requested,
+            // While running tests we need to make sure that the timestamps are different. Using current date causes false positives.
+            createdAt: `2023-01-01T00:0${i}:00.000Z`
+          }
+        }),
+        generateActionDocument({
+          configuration: tennisClubMembershipEvent,
+          action,
+          defaults: {
+            status: ActionStatus.Accepted,
+            createdAt: `2023-01-01T00:0${i + 1}:00.000Z`
+          }
+        })
+      ])
+    ]
+
+    const event = {
+      trackingId: getUUID(),
+      type: tennisClubMembershipEvent.id,
+      actions,
+      createdAt: new Date(Date.now()).toISOString(),
+      id: getUUID(),
+
+      updatedAt: new Date(Date.now()).toISOString()
+    }
+
+    const state = getCurrentEventState(event, tennisClubMembershipEvent)
+
+    const declareRequest = actions.find(
+      (action) =>
+        action.type === ActionType.DECLARE &&
+        action.status === ActionStatus.Requested
+    )
+
+    const declareAccept = actions.find(
+      (action) =>
+        action.type === ActionType.DECLARE &&
+        action.status === ActionStatus.Accepted
+    )
+
+    const registerRequest = actions.find(
+      (action) =>
+        action.type === ActionType.REGISTER &&
+        action.status === ActionStatus.Requested
+    )
+
+    const registerAccept = actions.find(
+      (action) =>
+        action.type === ActionType.REGISTER &&
+        action.status === ActionStatus.Accepted
+    )
+
+    expect(state.legalStatuses[EventStatus.enum.DECLARED]).toEqual({
+      createdAt: declareRequest?.createdAt,
+      createdBy: declareRequest?.createdBy,
+      createdByUserType: declareRequest?.createdByUserType,
+      createdAtLocation: declareRequest?.createdAtLocation,
+      createdByRole: declareRequest?.createdByRole,
+      acceptedAt: declareAccept?.createdAt
+    })
+
+    expect(state.legalStatuses[EventStatus.enum.REGISTERED]).toEqual({
+      createdAt: registerRequest?.createdAt,
+      createdBy: registerRequest?.createdBy,
+      createdByUserType: registerRequest?.createdByUserType,
+      createdAtLocation: registerRequest?.createdAtLocation,
+      createdByRole: registerRequest?.createdByRole,
+      acceptedAt: registerAccept?.createdAt
+    })
+  })
+
+  test('Sets timestamps correctly when legal statuses were accepted async', () => {
+    // NOTE: Values are not important, just the fact that right one is set. Using human-readable values for clarity
+    const createAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.CREATE,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-01-01T00:00:00.000Z',
+        createdBy: 'user1',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: getUUID(),
+        createdBySignature: 'signature.png' as DocumentPath,
+        createdByRole: 'FIELD_AGENT'
+      }
+    })
+
+    // Same person created the event and declared it
+    const declareRequestAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        status: ActionStatus.Requested,
+        createdAt: '2023-02-01T00:00:00.000Z',
+        createdBy: 'user1',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: getUUID(),
+        createdBySignature: 'signature.png' as DocumentPath,
+        createdByRole: 'FIELD_AGENT'
+      }
+    })
+
+    // 3rd party API accepted declaration async
+    const declareAcceptAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-03-01T00:00:00.000Z',
+        createdBy: 'computer1',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: 'location2' as UUID,
+        createdBySignature: 'signature-2.png' as DocumentPath,
+        createdByRole: '3RD_PARTY_API',
+        originalActionId: declareRequestAction.id
+      }
+    })
+
+    const registerRequestAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.REGISTER,
+      defaults: {
+        status: ActionStatus.Requested,
+        createdAt: '2023-05-01T00:00:00.000Z',
+        createdBy: 'user3',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: 'location4' as UUID,
+        createdByRole: 'LOCAL_REGISTRAR',
+        createdBySignature: 'signature-3.png' as DocumentPath
+      }
+    })
+
+    const registerAcceptAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.REGISTER,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-06-01T00:00:00.000Z',
+        createdBy: 'computer2',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: 'location5' as UUID,
+        createdBySignature: 'signature-4.png' as DocumentPath,
+        createdByRole: '3RD_PARTY_API',
+        registrationNumber: '123456789',
+        originalActionId: registerRequestAction.id
+      }
+    })
+
+    const actions = [
+      createAction,
+      declareRequestAction,
+      declareAcceptAction,
+      registerRequestAction,
+      registerAcceptAction
+    ]
+
+    const event = {
+      trackingId: getUUID(),
+      type: tennisClubMembershipEvent.id,
+      actions,
+      createdAt: new Date(Date.now()).toISOString(),
+      id: getUUID(),
+      updatedAt: new Date(Date.now()).toISOString()
+    }
+
+    const state = getCurrentEventState(event, tennisClubMembershipEvent)
+
+    expect(state).toStrictEqual({
+      createdAt: createAction.createdAt,
+      createdBy: createAction.createdBy,
+      createdAtLocation: createAction.createdAtLocation,
+      updatedAt: registerAcceptAction.createdAt,
+      updatedBy: registerRequestAction.createdBy,
+      createdByUserType: registerRequestAction.createdByUserType,
+      id: event.id,
+      type: event.type,
+      trackingId: event.trackingId,
+      status: EventStatus.enum.REGISTERED,
+      updatedByUserRole: registerRequestAction.createdByRole,
+      updatedAtLocation: registerRequestAction.createdAtLocation,
+      declaration: deepDropNulls(
+        declareRequestAction.declaration
+      ) as EventState,
+      dateOfEvent: createAction.createdAt.split('T')[0],
+      placeOfEvent: createAction.createdAtLocation,
+      flags: [],
+      potentialDuplicates: [],
+      legalStatuses: {
+        [EventStatus.enum.DECLARED]: {
+          createdAt: declareRequestAction.createdAt,
+          createdBy: declareRequestAction.createdBy,
+          createdByUserType: declareRequestAction.createdByUserType,
+          createdAtLocation: declareRequestAction.createdAtLocation,
+          createdByRole: declareRequestAction.createdByRole,
+          acceptedAt: declareAcceptAction.createdAt
+        },
+        [EventStatus.enum.REGISTERED]: {
+          createdAt: registerRequestAction.createdAt,
+          createdBy: registerRequestAction.createdBy,
+          createdByUserType: registerRequestAction.createdByUserType,
+          createdAtLocation: registerRequestAction.createdAtLocation,
+          acceptedAt: registerAcceptAction.createdAt,
+          createdByRole: registerRequestAction.createdByRole,
+          // @ts-expect-error -- We do not have sufficient types for this in generator
+          registrationNumber: registerAcceptAction.registrationNumber
+        }
+      }
+    } satisfies EventIndex)
+  })
+
+  test('Sets timestamps correctly when legal statuses were accepted immediately', () => {
+    // NOTE: Values are not important, just the fact that right one is set. Using human-readable values for clarity
+    const createAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.CREATE,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-01-01T00:00:00.000Z',
+        createdByUserType: TokenUserType.enum.user,
+        createdBy: 'user1',
+        createdBySignature: 'signature.png' as DocumentPath,
+        createdAtLocation: getUUID(),
+        createdByRole: 'FIELD_AGENT'
+      }
+    })
+
+    // Same person created the event and declared it
+    const declareAcceptAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-02-01T00:00:00.000Z',
+        createdByUserType: TokenUserType.enum.user,
+        createdBy: 'user1',
+        createdBySignature: 'signature.png' as DocumentPath,
+        createdAtLocation: getUUID(),
+        createdByRole: 'FIELD_AGENT'
+      }
+    })
+
+    const registerAcceptAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.REGISTER,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-05-01T00:00:00.000Z',
+        createdByUserType: TokenUserType.enum.user,
+        createdBy: 'user3',
+        createdBySignature: 'signature-3.png' as DocumentPath,
+        createdAtLocation: 'location4' as UUID,
+        createdByRole: 'LOCAL_REGISTRAR',
+        registrationNumber: '123456789'
+      }
+    })
+
+    const actions = [createAction, declareAcceptAction, registerAcceptAction]
+
+    const event = {
+      trackingId: getUUID(),
+      type: tennisClubMembershipEvent.id,
+      actions,
+      createdAt: new Date(Date.now()).toISOString(),
+      id: getUUID(),
+      updatedAt: new Date(Date.now()).toISOString()
+    }
+
+    const state = getCurrentEventState(event, tennisClubMembershipEvent)
+    expect(state).toStrictEqual({
+      createdAt: createAction.createdAt,
+      createdBy: createAction.createdBy,
+      createdByUserType: createAction.createdByUserType,
+      createdAtLocation: createAction.createdAtLocation,
+      updatedAt: registerAcceptAction.createdAt,
+      updatedBy: registerAcceptAction.createdBy,
+      id: event.id,
+      type: event.type,
+      trackingId: event.trackingId,
+      status: EventStatus.enum.REGISTERED,
+      updatedByUserRole: registerAcceptAction.createdByRole,
+      updatedAtLocation: registerAcceptAction.createdAtLocation,
+      declaration: deepDropNulls(declareAcceptAction.declaration) as EventState,
+      dateOfEvent: createAction.createdAt.split('T')[0],
+      placeOfEvent: createAction.createdAtLocation,
+      flags: [],
+      potentialDuplicates: [],
+      legalStatuses: {
+        [EventStatus.enum.DECLARED]: {
+          createdAt: declareAcceptAction.createdAt,
+          createdBy: declareAcceptAction.createdBy,
+          createdByUserType: declareAcceptAction.createdByUserType,
+          createdAtLocation: declareAcceptAction.createdAtLocation,
+          acceptedAt: declareAcceptAction.createdAt,
+          createdByRole: declareAcceptAction.createdByRole
+        },
+        [EventStatus.enum.REGISTERED]: {
+          createdAt: registerAcceptAction.createdAt,
+          createdBy: registerAcceptAction.createdBy,
+          createdByUserType: registerAcceptAction.createdByUserType,
+          createdAtLocation: registerAcceptAction.createdAtLocation,
+          acceptedAt: registerAcceptAction.createdAt,
+          createdByRole: registerAcceptAction.createdByRole,
+          // @ts-expect-error -- We do not have sufficient types for this in generator
+          registrationNumber: registerAcceptAction.registrationNumber
+        }
+      }
+    } satisfies EventIndex)
+  })
+
+  test('Flags are correctly set', () => {
+    const event1 = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        { type: ActionType.CREATE },
+        {
+          type: ActionType.DECLARE
+        },
+        { type: ActionType.REGISTER },
+        {
+          type: ActionType.REQUEST_CORRECTION
+        }
+      ]
+    })
+
+    expect(
+      getCurrentEventState(event1, tennisClubMembershipEvent).flags
+    ).toEqual([InherentFlags.CORRECTION_REQUESTED])
+
+    const event2 = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        { type: ActionType.CREATE },
+        {
+          type: ActionType.DECLARE
+        },
+        { type: ActionType.REGISTER }
+      ]
+    })
+
+    expect(
+      getCurrentEventState(event2, tennisClubMembershipEvent).flags
+    ).toEqual([])
+
+    const event3 = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        { type: ActionType.CREATE },
+        {
+          type: ActionType.DECLARE
+        },
+        { type: ActionType.REGISTER },
+        {
+          type: ActionType.PRINT_CERTIFICATE
+        }
+      ]
+    })
+
+    expect(
+      getCurrentEventState(event3, tennisClubMembershipEvent).flags.length
+    ).toEqual(0)
+  })
+
+  test('Ensure fields that have user conditional fields are included', () => {
+    const event = {
+      id: generateUuid(),
+      trackingId: 'VM5Y53',
+      type: tennisClubMembershipEvent.id,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      actions: [
+        generateActionDocument({
+          configuration: tennisClubMembershipEvent,
+          action: ActionType.CREATE
+        }),
+        generateActionDocument({
+          configuration: tennisClubMembershipEvent,
+          action: ActionType.DECLARE,
+          defaults: {
+            createdByRole: TestUserRole.enum.FIELD_AGENT,
+            declaration: {
+              'applicant.dob': '2025-07-22',
+              'applicant.name': {
+                surname: 'Feest',
+                firstname: 'Jordan',
+                middlename: 'Day'
+              },
+              'recommender.id': '123456789',
+              'senior-pass.id': '123123',
+              'recommender.name': {
+                surname: 'Feest',
+                firstname: 'Jordan',
+                middlename: 'Day'
+              },
+              'recommender.none': false,
+              'applicant.isRecommendedByFieldAgent': true
+            }
+          }
+        })
+      ]
+    } satisfies EventDocument
+
+    const declaration = getCurrentEventState(
+      event,
+      tennisClubMembershipEvent
+    ).declaration
+
+    // getCurrentEventState should never depend on who is calling it.
+    expect(declaration['applicant.isRecommendedByFieldAgent']).toBe(true)
+  })
+
+  test('Filter hidden fields while getting current event state', () => {
+    // case 1: dobUnknown = false → keep dob, drop age
+    const event1 = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        { type: ActionType.CREATE },
+        {
+          type: ActionType.DECLARE,
+          declarationOverrides: {
+            'applicant.dobUnknown': false,
+            'applicant.age': 20,
+            'applicant.dob': '2000-01-01'
+          }
+        }
+      ]
+    })
+
+    const eventState1 = getCurrentEventState(event1, tennisClubMembershipEvent)
+
+    expect(eventState1.declaration['applicant.dobUnknown']).toBe(false)
+    expect(eventState1.declaration['applicant.dob']).toBe('2000-01-01')
+    expect(eventState1.declaration['applicant.age']).toBe(undefined)
+
+    // case 2: dobUnknown = true → keep age, drop dob
+    const event2 = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        { type: ActionType.CREATE },
+        {
+          type: ActionType.DECLARE,
+          declarationOverrides: {
+            'applicant.dobUnknown': true,
+            'applicant.age': 20,
+            'applicant.dob': '2000-01-01'
+          }
+        }
+      ]
+    })
+
+    const eventState2 = getCurrentEventState(event2, tennisClubMembershipEvent)
+
+    expect(eventState2.declaration['applicant.dobUnknown']).toBe(true)
+    expect(eventState2.declaration['applicant.dob']).toBe(undefined)
+    expect(eventState2.declaration['applicant.age']).toBe(20)
+  })
+
+  test('should correctly merge the declaration from actions even when originalActionId is not available', () => {
+    const fullEvent = {
+      trackingId: getUUID(),
+      type: tennisClubMembershipEvent.id,
+      createdAt: new Date(Date.now()).toISOString(),
+      id: getUUID(),
+      updatedAt: new Date(Date.now()).toISOString(),
+      actions: [
+        {
+          id: '54594a56-0d9e-405d-a069-e81f5355242e' as UUID,
+          transactionId: 'tmp-d6e326d4-19ed-4f3f-8b7f-09bca9f4c74e',
+          createdByUserType: 'user',
+          createdAt: '2025-09-22T15:07:09.898Z',
+          createdBy: '68cd35f68cb33ba093f20256',
+          createdByRole: 'SOCIAL_WORKER',
+          createdAtLocation: '480f91d2-3b97-4a0a-9920-293f7dac6391' as UUID,
+          declaration: {},
+          status: 'Accepted',
+          type: 'CREATE',
+          annotation: {}
+        },
+        {
+          id: '67ce9faa-bce4-4208-bbe5-e55148364ba5' as UUID,
+          transactionId: 'tmp-d6e326d4-19ed-4f3f-8b7f-09bca9f4c74e',
+          createdByUserType: 'user',
+          createdAt: '2025-09-22T15:07:09.898Z',
+          createdBy: '68cd35f68cb33ba093f20256',
+          createdByRole: 'SOCIAL_WORKER',
+          createdAtLocation: '480f91d2-3b97-4a0a-9920-293f7dac6391' as UUID,
+          declaration: {},
+          status: 'Accepted',
+          type: 'ASSIGN',
+          assignedTo: '68cd35f68cb33ba093f20256',
+          annotation: {}
+        },
+        {
+          id: '80e4dee3-7409-47a1-9922-a872d8c9b9ae' as UUID,
+          transactionId: 'e4249dc3-7a7a-4f57-9fd8-73bea9e2bfcb',
+          createdByUserType: 'user',
+          createdAt: '2025-09-22T15:07:29.212Z',
+          createdBy: '68cd35f68cb33ba093f20256',
+          createdByRole: 'SOCIAL_WORKER',
+          createdAtLocation: '480f91d2-3b97-4a0a-9920-293f7dac6391' as UUID,
+          declaration: {
+            'applicant.name': {
+              surname: 'sdad',
+              firstname: 'Ashikul',
+              middlename: 'sdsa'
+            }
+          },
+          status: 'Accepted',
+          // the originalActionId is an action with a `status: 'Requested'` that is not in the actions array
+          // should still merge the declaration information when originalActionId is not listed
+          originalActionId: '2c93fd07-3c54-4b7c-93a6-4b1e79506fd8' as UUID,
+          type: 'NOTIFY',
+          annotation: {}
+        },
+        {
+          id: 'f17b8a91-16a5-45f4-92e0-881c707a4213' as UUID,
+          transactionId: 'e4249dc3-7a7a-4f57-9fd8-73bea9e2bfcb',
+          createdByUserType: 'user',
+          createdAt: '2025-09-22T15:07:29.216Z',
+          createdBy: '68cd35f68cb33ba093f20256',
+          createdByRole: 'SOCIAL_WORKER',
+          createdAtLocation: '480f91d2-3b97-4a0a-9920-293f7dac6391' as UUID,
+          declaration: {},
+          status: 'Accepted',
+          type: 'UNASSIGN',
+          annotation: {}
+        },
+        {
+          id: '95367738-61e7-421f-a4d0-23974017115a' as UUID,
+          transactionId: '0736cf71-43b4-4393-a830-1b9af88ee4ee',
+          createdByUserType: 'user',
+          createdAt: '2025-09-22T15:07:55.406Z',
+          createdBy: '68cd35f68cb33ba093f2025e',
+          createdByRole: 'REGISTRATION_AGENT',
+          createdAtLocation: '480f91d2-3b97-4a0a-9920-293f7dac6391' as UUID,
+          declaration: {},
+          status: 'Accepted',
+          type: 'READ',
+          annotation: {}
+        },
+        {
+          id: '027978ce-a4b0-4d1c-9fd1-3aeda86f4ef1' as UUID,
+          transactionId: '4ae24ac6-0ec2-45e0-8e7f-ce27711646e7',
+          createdByUserType: 'user',
+          createdAt: '2025-09-22T15:07:56.135Z',
+          createdBy: '68cd35f68cb33ba093f2025e',
+          createdByRole: 'REGISTRATION_AGENT',
+          createdAtLocation: '480f91d2-3b97-4a0a-9920-293f7dac6391' as UUID,
+          declaration: {},
+          annotation: {},
+          status: 'Accepted',
+          type: 'ASSIGN',
+          assignedTo: '68cd35f68cb33ba093f2025e'
+        }
+      ]
+    } satisfies EventDocument
+
+    const eventState = getCurrentEventState(
+      fullEvent,
+      tennisClubMembershipEvent
+    )
+
+    expect(eventState.declaration).toEqual({
+      'applicant.name': {
+        surname: 'sdad',
+        firstname: 'Ashikul',
+        middlename: 'sdsa'
+      }
+    })
+  })
+
+  test('EDIT action updates updatedAt, updatedBy and updatedAtLocation metadata', () => {
+    const createAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.CREATE,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-01-01T00:00:00.000Z',
+        createdBy: 'user1',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: getUUID(),
+        createdByRole: 'HOSPITAL_CLERK'
+      }
+    })
+
+    const declareAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-02-01T00:00:00.000Z',
+        createdBy: 'user1',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: getUUID(),
+        createdByRole: 'HOSPITAL_CLERK'
+      }
+    })
+
+    const editAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.EDIT,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-03-01T00:00:00.000Z',
+        createdBy: 'user2',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: getUUID(),
+        createdByRole: 'REGISTRATION_AGENT'
+      }
+    })
+
+    const event = {
+      trackingId: getUUID(),
+      type: tennisClubMembershipEvent.id,
+      actions: [createAction, declareAction, editAction],
+      createdAt: new Date(Date.now()).toISOString(),
+      id: getUUID(),
+      updatedAt: new Date(Date.now()).toISOString()
+    }
+
+    const state = getCurrentEventState(event, tennisClubMembershipEvent)
+
+    expect(state.updatedAt).toBe(editAction.createdAt)
+    expect(state.updatedBy).toBe(editAction.createdBy)
+    expect(state.updatedAtLocation).toBe(editAction.createdAtLocation)
+    expect(state.updatedByUserRole).toBe(editAction.createdByRole)
+  })
+
+  test('EDIT action does not affect legalStatuses', () => {
+    const createAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.CREATE,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-01-01T00:00:00.000Z',
+        createdBy: 'user1',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: getUUID(),
+        createdByRole: 'HOSPITAL_CLERK'
+      }
+    })
+
+    const declareAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-02-01T00:00:00.000Z',
+        createdBy: 'user1',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: getUUID(),
+        createdByRole: 'HOSPITAL_CLERK'
+      }
+    })
+
+    const editAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.EDIT,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-03-01T00:00:00.000Z',
+        createdBy: 'user2',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: getUUID(),
+        createdByRole: 'REGISTRATION_AGENT'
+      }
+    })
+
+    const event = {
+      trackingId: getUUID(),
+      type: tennisClubMembershipEvent.id,
+      actions: [createAction, declareAction, editAction],
+      createdAt: new Date(Date.now()).toISOString(),
+      id: getUUID(),
+      updatedAt: new Date(Date.now()).toISOString()
+    }
+
+    const state = getCurrentEventState(event, tennisClubMembershipEvent)
+
+    expect(state.legalStatuses[EventStatus.enum.DECLARED]).toMatchObject({
+      createdBy: declareAction.createdBy,
+      createdAtLocation: declareAction.createdAtLocation,
+      createdByRole: declareAction.createdByRole
+    })
+  })
+
+  test('sets dateOfEvent correctly when configured', () => {
+    const event = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        { type: ActionType.CREATE },
+        {
+          type: ActionType.DECLARE
+        },
+        { type: ActionType.REGISTER }
+      ]
+    })
+
+    const state = getCurrentEventState(event, {
+      ...tennisClubMembershipEvent,
+      dateOfEvent: { $$event: 'legalStatuses.REGISTERED.acceptedAt' }
+    })
+
+    expect(state.dateOfEvent).toEqual(
+      state.legalStatuses[EventStatus.enum.REGISTERED]?.acceptedAt.split('T')[0]
+    )
+  })
+})
+
+describe('correction requests', () => {
+  test('proposed correction data is not applied before the correction request is approved', () => {
+    const state = getCurrentEventState(
+      {
+        type: TENNIS_CLUB_MEMBERSHIP,
+        id: 'f743a5d5-19d4-44eb-9b0f-301a2d823bcf' as UUID,
+        trackingId: 'TEST12',
+        createdAt: '2025-01-23T02:21:38.343Z',
+        updatedAt: '2025-01-23T02:21:42.230Z',
+        actions: [
+          {
+            type: 'CREATE',
+            createdAt: '2025-01-23T02:21:38.343Z',
+            createdBy: '6791a7b2d7f8663e9f9dcbf0',
+            createdByRole: 'some-role',
+            createdByUserType: TokenUserType.enum.user,
+            createdAtLocation: '492a62a5-d55f-4421-84f5-defcfb9fe6ba' as UUID,
+            createdBySignature: 'signature.png' as DocumentPath,
+            id: '63d19916-dcc8-4cf2-8161-eab9989765e8' as UUID,
+            declaration: {},
+            status: ActionStatus.Accepted,
+            transactionId: getUUID()
+          },
+          {
+            declaration: {
+              'applicant.name': {
+                firstname: 'John',
+                surname: 'Doe'
+              }
+            },
+            type: 'DECLARE',
+            createdBy: '6791a7b2d7f8663e9f9dcbf0',
+            createdByRole: 'some-role',
+            createdByUserType: TokenUserType.enum.user,
+            createdAt: '2025-01-23T02:21:39.161Z',
+            createdAtLocation: '492a62a5-d55f-4421-84f5-defcfb9fe6ba' as UUID,
+            createdBySignature: 'signature.png' as DocumentPath,
+            id: 'eb4c18e5-93bc-42f6-b110-909815f6a7c8' as UUID,
+            status: ActionStatus.Accepted,
+            transactionId: getUUID()
+          },
+          {
+            declaration: {},
+            type: 'REGISTER',
+            createdBy: '6791a7b2d7f8663e9f9dcbf0',
+            createdByRole: 'some-role',
+            createdByUserType: TokenUserType.enum.user,
+            createdAt: '2025-01-23T02:21:40.182Z',
+            createdAtLocation: '492a62a5-d55f-4421-84f5-defcfb9fe6ba' as UUID,
+            createdBySignature: 'signature.png' as DocumentPath,
+            id: 'bec6b33a-7a5f-4acd-9638-9e77db1800e2' as UUID,
+            status: ActionStatus.Accepted,
+            transactionId: getUUID()
+          },
+          {
+            declaration: {
+              'applicant.name': {
+                firstname: 'Doe',
+                surname: 'John'
+              }
+            },
+            type: 'REQUEST_CORRECTION',
+            createdByUserType: TokenUserType.enum.user,
+            createdBy: '6791a7b2d7f8663e9f9dcbf0',
+            createdByRole: 'some-role',
+            createdAt: '2025-01-23T02:21:41.206Z',
+            createdAtLocation: '492a62a5-d55f-4421-84f5-defcfb9fe6ba' as UUID,
+            createdBySignature: 'signature.png' as DocumentPath,
+            id: '8f4d3b15-dfe9-44fb-b2b4-4b6e294c1c8d' as UUID,
+            status: ActionStatus.Accepted,
+            transactionId: getUUID()
+          }
+        ]
+      },
+      tennisClubMembershipEvent
+    )
+
+    const applicantName = state.declaration['applicant.name'] as {
+      firstname: string
+      surname: string
+    }
+
+    expect(applicantName.firstname).toBe('John')
+    expect(applicantName.surname).toBe('Doe')
+  })
+  test('proposed correction data is applied after the correction request is approved', () => {
+    const state = getCurrentEventState(
+      {
+        type: TENNIS_CLUB_MEMBERSHIP,
+        id: 'f743a5d5-19d4-44eb-9b0f-301a2d823bcf' as UUID,
+        trackingId: 'TEST12',
+        createdAt: '2025-01-23T02:21:38.343Z',
+        updatedAt: '2025-01-23T02:21:42.230Z',
+        actions: [
+          {
+            type: 'CREATE',
+            createdAt: '2025-01-23T02:21:38.343Z',
+            createdBy: '6791a7b2d7f8663e9f9dcbf0',
+            createdByRole: 'some-role',
+            createdByUserType: TokenUserType.enum.user,
+            createdAtLocation: '492a62a5-d55f-4421-84f5-defcfb9fe6ba' as UUID,
+            createdBySignature: 'signature.png' as DocumentPath,
+            id: '63d19916-dcc8-4cf2-8161-eab9989765e8' as UUID,
+            declaration: {},
+            status: ActionStatus.Accepted,
+            transactionId: getUUID()
+          },
+          {
+            declaration: {
+              'applicant.name': {
+                firstname: 'John',
+                surname: 'Doe'
+              }
+            },
+            type: 'DECLARE',
+            createdBy: '6791a7b2d7f8663e9f9dcbf0',
+            createdByRole: 'some-role',
+            createdBySignature: 'signature.png' as DocumentPath,
+            createdByUserType: TokenUserType.enum.user,
+            createdAt: '2025-01-23T02:21:39.161Z',
+            createdAtLocation: '492a62a5-d55f-4421-84f5-defcfb9fe6ba' as UUID,
+            id: 'eb4c18e5-93bc-42f6-b110-909815f6a7c8' as UUID,
+            status: ActionStatus.Accepted,
+            transactionId: getUUID()
+          },
+          {
+            declaration: {},
+            type: 'REGISTER',
+            createdBy: '6791a7b2d7f8663e9f9dcbf0',
+            createdByRole: 'some-role',
+            createdBySignature: 'signature.png' as DocumentPath,
+            createdByUserType: TokenUserType.enum.user,
+            createdAt: '2025-01-23T02:21:40.182Z',
+            createdAtLocation: '492a62a5-d55f-4421-84f5-defcfb9fe6ba' as UUID,
+            id: 'bec6b33a-7a5f-4acd-9638-9e77db1800e2' as UUID,
+            status: ActionStatus.Accepted,
+            transactionId: getUUID()
+          },
+          {
+            declaration: {
+              'applicant.name': {
+                firstname: 'Doe',
+                surname: 'John'
+              }
+            },
+            type: 'REQUEST_CORRECTION',
+            createdBy: '6791a7b2d7f8663e9f9dcbf0',
+            createdByRole: 'some-role',
+            createdBySignature: 'signature.png' as DocumentPath,
+            createdByUserType: TokenUserType.enum.user,
+            createdAt: '2025-01-23T02:21:41.206Z',
+            createdAtLocation: '492a62a5-d55f-4421-84f5-defcfb9fe6ba' as UUID,
+            id: '8f4d3b15-dfe9-44fb-b2b4-4b6e294c1c8d' as UUID,
+            status: ActionStatus.Accepted,
+            transactionId: getUUID()
+          },
+          {
+            declaration: {},
+            requestId: '8f4d3b15-dfe9-44fb-b2b4-4b6e294c1c8d',
+            type: 'APPROVE_CORRECTION',
+            createdBy: '6791a7b2d7f8663e9f9dcbf0',
+            createdByRole: 'some-role',
+            createdByUserType: TokenUserType.enum.user,
+            createdBySignature: 'signature.png' as DocumentPath,
+            createdAt: '2025-01-23T02:21:42.230Z',
+            createdAtLocation: '492a62a5-d55f-4421-84f5-defcfb9fe6ba' as UUID,
+            id: '94d5a963-0125-4d31-85f0-6d77080758f4' as UUID,
+            status: ActionStatus.Accepted,
+            transactionId: getUUID()
+          }
+        ]
+      },
+      tennisClubMembershipEvent
+    )
+
+    const applicantName = state.declaration['applicant.name'] as {
+      firstname: string
+      surname: string
+    }
+
+    expect(applicantName.firstname).toBe('Doe')
+    expect(applicantName.surname).toBe('John')
+  })
+
+  test('updatedAtLocation reflects the registrar who submitted REGISTER while it awaits async confirmation', () => {
+    const createAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.CREATE,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-01-01T00:00:00.000Z',
+        createdBy: 'user1',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: 'location1' as UUID,
+        createdByRole: 'FIELD_AGENT'
+      }
+    })
+
+    const declareAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-02-01T00:00:00.000Z',
+        createdBy: 'user2',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: 'location2' as UUID,
+        createdByRole: 'FIELD_AGENT'
+      }
+    })
+
+    // Registrar clicks Register — countryconfig returns 202, Accepted not yet written
+    const registerRequestAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.REGISTER,
+      defaults: {
+        status: ActionStatus.Requested,
+        createdAt: '2023-03-01T00:00:00.000Z',
+        createdBy: 'user3',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: 'location3' as UUID,
+        createdByRole: 'LOCAL_REGISTRAR'
+      }
+    })
+
+    const event = {
+      trackingId: getUUID(),
+      type: tennisClubMembershipEvent.id,
+      id: getUUID(),
+      createdAt: '2023-01-01T00:00:00.000Z',
+      updatedAt: '2023-03-01T00:00:00.000Z',
+      actions: [createAction, declareAction, registerRequestAction]
+    }
+
+    const state = getCurrentEventState(event, tennisClubMembershipEvent)
+
+    // Still DECLARED — REGISTERED requires an Accepted REGISTER
+    expect(state.status).toBe(EventStatus.enum.DECLARED)
+
+    // Metadata reflects the registrar who submitted the request, not the 3rd party
+    expect(state.updatedBy).toBe(registerRequestAction.createdBy)
+    expect(state.updatedAtLocation).toBe(
+      registerRequestAction.createdAtLocation
+    )
+    expect(state.updatedByUserRole).toBe(registerRequestAction.createdByRole)
+
+    // REGISTERED legalStatus not set yet
+    expect(state.legalStatuses[EventStatus.enum.REGISTERED]).toBeUndefined()
+
+    // Flag marks the record as pending external validation
+    expect(state.flags).toContain('register:requested')
+  })
+
+  test('updatedAtLocation uses the Requested action metadata once REGISTER is asynchronously accepted', () => {
+    const createAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.CREATE,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-01-01T00:00:00.000Z',
+        createdBy: 'user1',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: 'location1' as UUID,
+        createdByRole: 'FIELD_AGENT'
+      }
+    })
+
+    const declareAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-02-01T00:00:00.000Z',
+        createdBy: 'user2',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: 'location2' as UUID,
+        createdByRole: 'FIELD_AGENT'
+      }
+    })
+
+    const registerRequestAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.REGISTER,
+      defaults: {
+        status: ActionStatus.Requested,
+        createdAt: '2023-03-01T00:00:00.000Z',
+        createdBy: 'user3',
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: 'location3' as UUID,
+        createdByRole: 'LOCAL_REGISTRAR'
+      }
+    })
+
+    // 3rd party accepts — carries originalActionId pointing back to the Requested action
+    const registerAcceptAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.REGISTER,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2023-04-01T00:00:00.000Z',
+        createdBy: 'system',
+        createdByUserType: TokenUserType.enum.system,
+        createdAtLocation: 'system-location' as UUID,
+        createdByRole: undefined,
+        registrationNumber: 'REG-123',
+        originalActionId: registerRequestAction.id
+      }
+    })
+
+    const event = {
+      trackingId: getUUID(),
+      type: tennisClubMembershipEvent.id,
+      id: getUUID(),
+      createdAt: '2023-01-01T00:00:00.000Z',
+      updatedAt: '2023-04-01T00:00:00.000Z',
+      actions: [
+        createAction,
+        declareAction,
+        registerRequestAction,
+        registerAcceptAction
+      ]
+    }
+
+    const state = getCurrentEventState(event, tennisClubMembershipEvent)
+
+    expect(state.status).toBe(EventStatus.enum.REGISTERED)
+
+    // Metadata should still point to the registrar, NOT the 3rd-party system
+    expect(state.updatedBy).toBe(registerRequestAction.createdBy)
+    expect(state.updatedAtLocation).toBe(
+      registerRequestAction.createdAtLocation
+    )
+    expect(state.updatedByUserRole).toBe(registerRequestAction.createdByRole)
+
+    // register:requested flag is no longer present once accepted
+    expect(state.flags).not.toContain('register:requested')
+  })
+
+  test('approval declaration is merged on top of approved correction request', () => {
+    const correctionRequestId = generateUuid()
+    const correctionRequestAction = {
+      ...generateActionDocument({
+        configuration: tennisClubMembershipEvent,
+        action: ActionType.REQUEST_CORRECTION,
+        defaults: {
+          id: correctionRequestId,
+          status: ActionStatus.Accepted,
+          createdAt: '2025-01-23T02:21:41.206Z',
+          declaration: {
+            'applicant.name': {
+              firstname: 'Doe',
+              surname: 'John'
+            }
+          }
+        }
+      }),
+      id: correctionRequestId
+    }
+
+    const approveCorrectionAction = {
+      ...generateActionDocument({
+        configuration: tennisClubMembershipEvent,
+        action: ActionType.APPROVE_CORRECTION,
+        defaults: {
+          status: ActionStatus.Accepted,
+          createdAt: '2025-01-23T02:21:42.230Z',
+          declaration: {
+            'applicant.name': {
+              firstname: 'Jane',
+              surname: 'Smith'
+            }
+          }
+        }
+      }),
+      requestId: correctionRequestId
+    }
+
+    const event = {
+      type: TENNIS_CLUB_MEMBERSHIP,
+      id: generateUuid(),
+      trackingId: 'TEST12',
+      createdAt: '2025-01-23T02:21:38.343Z',
+      updatedAt: '2025-01-23T02:21:42.230Z',
+      actions: [
+        generateActionDocument({
+          configuration: tennisClubMembershipEvent,
+          action: ActionType.CREATE,
+          defaults: {
+            status: ActionStatus.Accepted,
+            createdAt: '2025-01-23T02:21:38.343Z'
+          }
+        }),
+        generateActionDocument({
+          configuration: tennisClubMembershipEvent,
+          action: ActionType.DECLARE,
+          defaults: {
+            status: ActionStatus.Accepted,
+            createdAt: '2025-01-23T02:21:39.161Z',
+            declaration: {
+              'applicant.name': {
+                firstname: 'John',
+                surname: 'Doe'
+              }
+            }
+          }
+        }),
+        generateActionDocument({
+          configuration: tennisClubMembershipEvent,
+          action: ActionType.REGISTER,
+          defaults: {
+            status: ActionStatus.Accepted,
+            createdAt: '2025-01-23T02:21:40.182Z',
+            declaration: {}
+          }
+        }),
+        correctionRequestAction,
+        approveCorrectionAction
+      ]
+    }
+
+    const state = getCurrentEventState(event, tennisClubMembershipEvent)
+    const applicantName = state.declaration['applicant.name'] as {
+      firstname: string
+      surname: string
+    }
+
+    expect(applicantName.firstname).toBe('Jane')
+    expect(applicantName.surname).toBe('Smith')
+  })
+
+  test('APPROVE_CORRECTION by a different user updates updatedBy/updatedAt to the reviewer', () => {
+    const ro = {
+      id: 'ro-user-id',
+      role: 'REGISTRATION_AGENT',
+      location: getUUID()
+    }
+    const registrar = {
+      id: 'registrar-user-id',
+      role: 'LOCAL_REGISTRAR',
+      location: getUUID()
+    }
+
+    const correctionRequestAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.REQUEST_CORRECTION,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2025-01-23T02:21:41.206Z',
+        createdBy: ro.id,
+        createdByRole: ro.role,
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: ro.location
+      }
+    })
+
+    const approveCorrectionAction = {
+      ...generateActionDocument({
+        configuration: tennisClubMembershipEvent,
+        action: ActionType.APPROVE_CORRECTION,
+        defaults: {
+          status: ActionStatus.Accepted,
+          createdAt: '2025-01-23T02:21:42.230Z',
+          createdBy: registrar.id,
+          createdByRole: registrar.role,
+          createdByUserType: TokenUserType.enum.user,
+          createdAtLocation: registrar.location
+        }
+      }),
+      requestId: correctionRequestAction.id
+    }
+
+    const event = {
+      type: TENNIS_CLUB_MEMBERSHIP,
+      id: generateUuid(),
+      trackingId: 'TEST12',
+      createdAt: '2025-01-23T02:21:38.343Z',
+      updatedAt: '2025-01-23T02:21:42.230Z',
+      actions: [
+        generateActionDocument({
+          configuration: tennisClubMembershipEvent,
+          action: ActionType.CREATE,
+          defaults: {
+            status: ActionStatus.Accepted,
+            createdAt: '2025-01-23T02:21:38.343Z'
+          }
+        }),
+        generateActionDocument({
+          configuration: tennisClubMembershipEvent,
+          action: ActionType.REGISTER,
+          defaults: {
+            status: ActionStatus.Accepted,
+            createdAt: '2025-01-23T02:21:40.182Z'
+          }
+        }),
+        correctionRequestAction,
+        approveCorrectionAction
+      ]
+    }
+
+    const state = getCurrentEventState(event, tennisClubMembershipEvent)
+
+    expect(state.updatedBy).toBe(registrar.id)
+    expect(state.updatedAt).toBe(approveCorrectionAction.createdAt)
+    expect(state.updatedAtLocation).toBe(registrar.location)
+    expect(state.updatedByUserRole).toBe(registrar.role)
+  })
+
+  test('REJECT_CORRECTION by a different user updates updatedBy/updatedAt to the reviewer', () => {
+    const ro = {
+      id: 'ro-user-id',
+      role: 'REGISTRATION_AGENT',
+      location: getUUID()
+    }
+    const registrar = {
+      id: 'registrar-user-id',
+      role: 'LOCAL_REGISTRAR',
+      location: getUUID()
+    }
+
+    const correctionRequestAction = generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.REQUEST_CORRECTION,
+      defaults: {
+        status: ActionStatus.Accepted,
+        createdAt: '2025-01-23T02:21:41.206Z',
+        createdBy: ro.id,
+        createdByRole: ro.role,
+        createdByUserType: TokenUserType.enum.user,
+        createdAtLocation: ro.location
+      }
+    })
+
+    const rejectCorrectionAction = {
+      ...generateActionDocument({
+        configuration: tennisClubMembershipEvent,
+        action: ActionType.REJECT_CORRECTION,
+        defaults: {
+          status: ActionStatus.Accepted,
+          createdAt: '2025-01-23T02:21:42.230Z',
+          createdBy: registrar.id,
+          createdByRole: registrar.role,
+          createdByUserType: TokenUserType.enum.user,
+          createdAtLocation: registrar.location
+        }
+      }),
+      requestId: correctionRequestAction.id
+    }
+
+    const event = {
+      type: TENNIS_CLUB_MEMBERSHIP,
+      id: generateUuid(),
+      trackingId: 'TEST12',
+      createdAt: '2025-01-23T02:21:38.343Z',
+      updatedAt: '2025-01-23T02:21:42.230Z',
+      actions: [
+        generateActionDocument({
+          configuration: tennisClubMembershipEvent,
+          action: ActionType.CREATE,
+          defaults: {
+            status: ActionStatus.Accepted,
+            createdAt: '2025-01-23T02:21:38.343Z'
+          }
+        }),
+        generateActionDocument({
+          configuration: tennisClubMembershipEvent,
+          action: ActionType.REGISTER,
+          defaults: {
+            status: ActionStatus.Accepted,
+            createdAt: '2025-01-23T02:21:40.182Z'
+          }
+        }),
+        correctionRequestAction,
+        rejectCorrectionAction
+      ]
+    }
+
+    const state = getCurrentEventState(event, tennisClubMembershipEvent)
+
+    expect(state.updatedBy).toBe(registrar.id)
+    expect(state.updatedAt).toBe(rejectCorrectionAction.createdAt)
+    expect(state.updatedAtLocation).toBe(registrar.location)
+    expect(state.updatedByUserRole).toBe(registrar.role)
+  })
+})
+
+describe('address state transitions', () => {
+  const addressWithoutVillage = {
+    country: 'FAR',
+    addressType: AddressType.DOMESTIC,
+    province: 'a45b982a-5c7b-4bd9-8fd8-a42d0994054c',
+    district: '5ef450bc-712d-48ad-93f3-8da0fa453baa',
+    urbanOrRural: 'RURAL' as const
+  }
+
+  const initialAddress = {
+    ...addressWithoutVillage,
+    village: 'Small village'
+  }
+
+  const initialForm = {
+    'applicant.dob': '2000-02-01',
+    'applicant.name': {
+      firstname: 'John',
+      surname: 'Doe'
+    },
+    'recommender.none': true,
+    'applicant.address': { ...initialAddress }
+  }
+
+  const initialActions = [
+    generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.CREATE
+    }),
+    generateActionDocument({
+      configuration: tennisClubMembershipEvent,
+      action: ActionType.DECLARE,
+      defaults: {
+        declaration: initialForm
+      }
+    })
+  ]
+
+  test('should persist optional "village" field in address, even if it is not included in payload', () => {
+    const actions = [
+      ...initialActions,
+      generateActionDocument({
+        configuration: tennisClubMembershipEvent,
+        action: ActionType.DECLARE,
+        defaults: {
+          declaration: {
+            'applicant.address': addressWithoutVillage
+          }
+        }
+      })
+    ]
+
+    const state = getCurrentEventState(
+      {
+        trackingId: getUUID(),
+        type: tennisClubMembershipEvent.id,
+        createdAt: new Date().toISOString(),
+        actions,
+        id: getUUID(),
+        updatedAt: new Date().toISOString()
+      },
+      tennisClubMembershipEvent
+    )
+
+    expect(state.declaration).toEqual(initialForm)
+  })
+
+  test('should remove optional "village" field in address when it is set to null', () => {
+    const addressWithNullVillage = {
+      ...addressWithoutVillage,
+      village: null
+    }
+
+    const actions = [
+      ...initialActions,
+      generateActionDocument({
+        configuration: tennisClubMembershipEvent,
+        action: ActionType.DECLARE,
+        defaults: {
+          declaration: {
+            'applicant.address': addressWithNullVillage
+          }
+        }
+      })
+    ]
+
+    const state = getCurrentEventState(
+      {
+        trackingId: getUUID(),
+        type: tennisClubMembershipEvent.id,
+        createdAt: new Date().toISOString(),
+        actions,
+        id: getUUID(),
+        updatedAt: new Date().toISOString()
+      },
+      tennisClubMembershipEvent
+    )
+
+    expect(state.declaration).toEqual({
+      ...initialForm,
+      'applicant.address': addressWithoutVillage
+    })
+  })
+})
+
+describe('deepDropNulls()', () => {
+  it('should clean nulls correctly with nested objects', () => {
+    const before = {
+      a: null,
+      b: {
+        c: null,
+        d: 'foo',
+        e: [{ foo: 'bar' }]
+      },
+      f: [{ asd: 'asd' }]
+    }
+
+    const after = deepDropNulls(before)
+
+    expect(after).toEqual({
+      b: {
+        d: 'foo',
+        e: [{ foo: 'bar' }]
+      },
+      f: [{ asd: 'asd' }]
+    })
+  })
+
+  it('should preserve primitive values', () => {
+    expect(deepDropNulls('string')).toBe('string')
+    expect(deepDropNulls(123)).toBe(123)
+    expect(deepDropNulls(false)).toBe(false)
+    expect(deepDropNulls(null)).toBe(null)
+    expect(deepDropNulls(undefined)).toBe(undefined)
+  })
+})
+
+function reorderEventActionDates(
+  event: EventDocument,
+  baseDate: string = '2025-02-06T03:36:00.000Z'
+): EventDocument {
+  const order = ['CREATE', 'DECLARE', 'REGISTER', 'REQUEST_CORRECTION']
+
+  // Sort actions based on logical order
+  const sortedActions = [...event.actions].sort(
+    (a, b) => order.indexOf(a.type) - order.indexOf(b.type)
+  )
+
+  // Generate new actions with updated timestamps
+  const base = new Date(baseDate)
+  const updatedActions = sortedActions.map((action, i) => {
+    const newDate = new Date(base)
+    newDate.setDate(base.getDate() + i)
+    return {
+      ...action,
+      createdAt: newDate.toISOString()
+    }
+  })
+
+  // Return a new document with updated actions
+  return {
+    ...event,
+    actions: updatedActions
+  } satisfies EventDocument
+}
+
+describe('test status of a record when actions are not in order', () => {
+  it('take REGISTER action as the status of a record', () => {
+    const event = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        {
+          type: ActionType.DECLARE
+        },
+        { type: ActionType.REGISTER },
+        { type: ActionType.CREATE },
+        {
+          type: ActionType.REQUEST_CORRECTION
+        }
+      ]
+    })
+
+    const orderedEvent = reorderEventActionDates(event)
+
+    expect(
+      getCurrentEventState(orderedEvent, tennisClubMembershipEvent).status
+    ).toBe(EventStatus.enum.REGISTERED)
+  })
+
+  it('take DECLARE action as the status of a record', () => {
+    const event = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        {
+          type: ActionType.DECLARE
+        },
+        { type: ActionType.CREATE }
+      ]
+    })
+
+    const orderedEvent = reorderEventActionDates(event)
+
+    expect(
+      getCurrentEventState(orderedEvent, tennisClubMembershipEvent).status
+    ).toBe(EventStatus.enum.DECLARED)
+  })
+})
+
+describe('archive/unarchive status resolution', () => {
+  test('status is ARCHIVED while archived and not yet unarchived', () => {
+    const event = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        { type: ActionType.CREATE },
+        { type: ActionType.DECLARE },
+        { type: ActionType.ARCHIVE }
+      ]
+    })
+
+    expect(getCurrentEventState(event, tennisClubMembershipEvent).status).toBe(
+      EventStatus.enum.ARCHIVED
+    )
+  })
+
+  test('restores NOTIFIED status after unarchiving a notified record', () => {
+    const event = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        { type: ActionType.CREATE },
+        { type: ActionType.NOTIFY },
+        { type: ActionType.ARCHIVE },
+        { type: ActionType.UNARCHIVE }
+      ]
+    })
+
+    expect(getCurrentEventState(event, tennisClubMembershipEvent).status).toBe(
+      EventStatus.enum.NOTIFIED
+    )
+  })
+
+  test('restores DECLARED status after unarchiving a declared record', () => {
+    const event = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        { type: ActionType.CREATE },
+        { type: ActionType.DECLARE },
+        { type: ActionType.ARCHIVE },
+        { type: ActionType.UNARCHIVE }
+      ]
+    })
+
+    expect(getCurrentEventState(event, tennisClubMembershipEvent).status).toBe(
+      EventStatus.enum.DECLARED
+    )
+  })
+
+  test('handles repeated archive/unarchive cycles, always restoring the last real status', () => {
+    const event = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        { type: ActionType.CREATE },
+        { type: ActionType.NOTIFY },
+        { type: ActionType.ARCHIVE },
+        { type: ActionType.UNARCHIVE },
+        { type: ActionType.DECLARE },
+        { type: ActionType.ARCHIVE },
+        { type: ActionType.UNARCHIVE }
+      ]
+    })
+
+    expect(getCurrentEventState(event, tennisClubMembershipEvent).status).toBe(
+      EventStatus.enum.DECLARED
+    )
+  })
+
+  test('a rejected-then-archived record keeps the REJECTED flag after being unarchived', () => {
+    const event = generateEventDocument({
+      configuration: tennisClubMembershipEvent,
+      actions: [
+        { type: ActionType.CREATE },
+        { type: ActionType.DECLARE },
+        { type: ActionType.REJECT },
+        { type: ActionType.ARCHIVE },
+        { type: ActionType.UNARCHIVE }
+      ]
+    })
+
+    const state = getCurrentEventState(event, tennisClubMembershipEvent)
+    expect(state.status).toBe(EventStatus.enum.DECLARED)
+    expect(state.flags).toContain(InherentFlags.REJECTED)
+  })
+})

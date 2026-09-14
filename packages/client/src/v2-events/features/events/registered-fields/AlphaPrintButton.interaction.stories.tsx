@@ -1,0 +1,218 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import type { Meta, StoryObj } from '@storybook/react'
+import { within, expect } from '@storybook/test'
+import React from 'react'
+import styled from 'styled-components'
+import { createTRPCMsw, httpLink } from '@vafanassieff/msw-trpc'
+import superjson from 'superjson'
+import {
+  ActionType,
+  and,
+  ConditionalType,
+  event,
+  EventDocument,
+  FieldType,
+  tennisClubMembershipEvent,
+  TestUserRole,
+  user,
+  not,
+  FieldConditional,
+  ValidatorContext
+} from '@opencrvs/commons/client'
+import { ROUTES } from '@client/v2-events/routes'
+import { FormFieldGenerator } from '@client/v2-events/components/forms/FormFieldGenerator'
+import { AppRouter, TRPCProvider } from '@client/v2-events/trpc'
+import { createTemporaryId } from '@client/v2-events/utils'
+
+import { tennisClubMembershipEventDocument } from '../fixtures'
+import { getTestValidatorContext } from '../../../../../.storybook/decorators'
+
+const tRPCMsw = createTRPCMsw<AppRouter>({
+  links: [
+    httpLink({
+      url: '/api/events'
+    })
+  ],
+  transformer: { input: superjson, output: superjson }
+})
+
+const meta: Meta<typeof FormFieldGenerator> = {
+  title: 'Inputs/AlphaPrintButton/Interaction',
+  decorators: [
+    (Story) => (
+      <TRPCProvider>
+        <Story />
+      </TRPCProvider>
+    )
+  ],
+  parameters: {
+    msw: {
+      handlers: {
+        event: [
+          tRPCMsw.event.config.get.query(() => {
+            return [tennisClubMembershipEvent]
+          })
+        ]
+      }
+    }
+  }
+}
+
+export default meta
+
+const StyledFormFieldGenerator = styled(FormFieldGenerator)`
+  width: 400px;
+`
+function createAlphaPrintButtonStoryParameters(
+  conditional: FieldConditional,
+  validatorContext: ValidatorContext
+) {
+  return {
+    reactRouter: {
+      router: {
+        path: ROUTES.V2.EVENTS.DECLARE.REVIEW.buildPath({
+          eventId: tennisClubMembershipEventDocument.id
+        }),
+        element: (
+          <StyledFormFieldGenerator
+            fields={[
+              {
+                id: 'storybook.name',
+                type: FieldType.ALPHA_PRINT_BUTTON,
+                label: {
+                  id: 'storybook.name.label',
+                  defaultMessage: 'Name',
+                  description: 'The title for the name input'
+                },
+                configuration: {
+                  template: 'simple-certificate'
+                },
+                conditionals: [conditional]
+              }
+            ]}
+            id="my-form"
+            validatorContext={validatorContext}
+          />
+        )
+      },
+      initialPath: ROUTES.V2.EVENTS.DECLARE.REVIEW.buildPath({
+        eventId: tennisClubMembershipEventDocument.id
+      })
+    }
+  }
+}
+
+export const WithEnableCondition: StoryObj<{}> = {
+  parameters: createAlphaPrintButtonStoryParameters(
+    {
+      type: ConditionalType.ENABLE,
+      conditional: and(
+        user.hasRole(TestUserRole.enum.LOCAL_REGISTRAR),
+        not(event.hasAction(ActionType.DECLARE))
+      )
+    },
+    getTestValidatorContext(TestUserRole.enum.LOCAL_REGISTRAR, {
+      ...tennisClubMembershipEventDocument,
+      actions: tennisClubMembershipEventDocument.actions.filter(
+        (action) => action.type === ActionType.CREATE
+      )
+    })
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const button = await canvas.findByTestId('storybook____name')
+
+    await expect(button).toBeEnabled()
+  }
+}
+
+export const WithDisableCondition: StoryObj<{}> = {
+  parameters: createAlphaPrintButtonStoryParameters(
+    {
+      type: ConditionalType.ENABLE,
+      conditional: and(
+        user.hasRole(TestUserRole.enum.LOCAL_REGISTRAR),
+        not(event.hasAction(ActionType.DECLARE))
+      )
+    },
+    getTestValidatorContext(
+      TestUserRole.enum.LOCAL_REGISTRAR,
+      tennisClubMembershipEventDocument
+    )
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const button = await canvas.findByTestId('storybook____name')
+
+    await expect(button).toBeDisabled()
+  }
+}
+
+/**
+ * Verifies that the AlphaPrintButton renders when the URL `eventId` is a
+ * temporary id (e.g. `tmp-<uuid>`). Before the fix, `UUID.parse()` threw on
+ * non-UUID strings and the component failed to mount on draft records.
+ */
+const temporaryEventId = createTemporaryId()
+const temporaryEventDocument: EventDocument = {
+  ...tennisClubMembershipEventDocument,
+  id: temporaryEventId
+}
+
+export const WithTemporaryEventId: StoryObj<{}> = {
+  parameters: {
+    reactRouter: {
+      router: {
+        path: ROUTES.V2.EVENTS.DECLARE.REVIEW.buildPath({
+          eventId: temporaryEventId
+        }),
+        element: (
+          <StyledFormFieldGenerator
+            fields={[
+              {
+                id: 'storybook.name',
+                type: FieldType.ALPHA_PRINT_BUTTON,
+                label: {
+                  id: 'storybook.name.label',
+                  defaultMessage: 'Name',
+                  description: 'The title for the name input'
+                },
+                configuration: {
+                  template: 'simple-certificate'
+                }
+              }
+            ]}
+            id="my-form"
+            validatorContext={getTestValidatorContext(
+              TestUserRole.enum.LOCAL_REGISTRAR,
+              temporaryEventDocument
+            )}
+          />
+        )
+      },
+      initialPath: ROUTES.V2.EVENTS.DECLARE.REVIEW.buildPath({
+        eventId: temporaryEventId
+      })
+    },
+    offline: {
+      events: [temporaryEventDocument]
+    }
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const button = await canvas.findByTestId('storybook____name')
+
+    await expect(button).toBeInTheDocument()
+    await expect(button).toBeEnabled()
+  }
+}

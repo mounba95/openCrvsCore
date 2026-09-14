@@ -1,0 +1,423 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import { defineMessages } from 'react-intl'
+
+export const userMessages = defineMessages({
+  accountTitle: {
+    defaultMessage: 'Account',
+    description: 'Account header',
+    id: 'settings.account.tile'
+  },
+  CHA: {
+    defaultMessage: 'CHA',
+    description: 'The description for CHA type',
+    id: 'constants.cha'
+  },
+  CHAIRMAN: {
+    defaultMessage: 'Chairman',
+    description: 'The description for CHAIRMAN type',
+    id: 'constants.chairman'
+  },
+  changeLanguageMessege: {
+    defaultMessage: 'Your prefered language that you want to use on OpenCRVS',
+    description: 'Change language message',
+    id: 'settings.message.changeLanguage'
+  },
+  changeLanguageSuccessMessage: {
+    defaultMessage: 'Language updated',
+    description: 'Change language success',
+    id: 'settings.changeLanguage.success'
+  },
+  changeLanguageTitle: {
+    defaultMessage: 'Change language',
+    description: 'Change language title',
+    id: 'settings.changeLanguage'
+  },
+  DATA_ENTRY_CLERK: {
+    defaultMessage: 'Data entry clerk',
+    description: 'The description for DATA_ENTRY_CLERK type',
+    id: 'constants.dataEntryClerk'
+  },
+  DISTRICT_REGISTRAR: {
+    defaultMessage: 'District Registrar',
+    description: 'The description for DISTRICT_REGISTRAR role',
+    id: 'constants.districtRegistrar'
+  },
+  POLICE_OFFICER: {
+    defaultMessage: 'Police Officer',
+    description: 'The description for Police Officer type',
+    id: 'constants.policeOfficer'
+  },
+  HOSPITAL_CLERK: {
+    defaultMessage: 'Hospital Clerk',
+    description: 'The description for Hospital Clerk type',
+    id: 'constants.socialWorker'
+  },
+  COMMUNITY_LEADER: {
+    defaultMessage: 'Community Leader',
+    description: 'The description for Community Leader type',
+    id: 'constants.communityLeader'
+  },
+  HEALTHCARE_WORKER: {
+    defaultMessage: 'Healthcare Worker',
+    description: 'The description for Healthcare Worker type',
+    id: 'constants.healthcareWorker'
+  },
+  DNRPC: {
+    defaultMessage: 'DNRPC',
+    description: 'The description for DNRPC type',
+    id: 'constants.dnrpc'
+  },
+  ENTREPENEUR: {
+    defaultMessage: 'Entrepeneur',
+    description: 'The description for ENTREPENEUR type',
+    id: 'constants.entrepeneur'
+  },
+  FIELD_AGENT: {
+    defaultMessage: 'Field Agent',
+    description: 'The description for FIELD_AGENT role',
+    id: 'constants.fieldAgent'
+  },
+  HEALTH_DIVISION: {
+    defaultMessage: 'Health Division',
+    description: 'The description for HEALTH_DIVISION type',
+    id: 'constants.healthDivision'
+  },
+  HOSPITAL: {
+    defaultMessage: 'Hospital',
+    description: 'The description for HOSPITAL type',
+    id: 'userSetup.type.hospital'
+  },
+  healthSystem: {
+    defaultMessage: 'Health System',
+    description: 'The description for health system type',
+    id: 'userSetup.type.healthSystem'
+  },
+  system: {
+    defaultMessage: 'System',
+    description: 'The description for system type',
+    id: 'userSetup.type.system'
+  },
+  labelEnglishName: {
+    defaultMessage: 'Full name',
+    description: 'English name label',
+    id: 'settings.user.label.nameEN'
+  },
+  LOCAL_REGISTRAR: {
+    defaultMessage: 'Registrar',
+    description: 'The description for LOCAL_REGISTRAR role',
+    id: 'constants.localRegistrar'
+  },
+  LOCAL_SYSTEM_ADMIN: {
+    defaultMessage: 'Sysadmin',
+    description: 'The description for Sysadmin role',
+    id: 'home.header.localSystemAdmin'
+  },
+  MAYOR: {
+    defaultMessage: 'Mayor',
+    description: 'The description for MAYOR type',
+    id: 'constants.mayor'
+  },
+  NATIONAL_REGISTRAR: {
+    defaultMessage: 'National Registrar',
+    description: 'The description for NATIONAL_REGISTRAR role',
+    id: 'constants.nationalRegistrar'
+  },
+  NATIONAL_SYSTEM_ADMIN: {
+    defaultMessage: 'System admin (national)',
+    description: 'The description for System admin (national)',
+    id: 'constants.nationalSystemAdmin'
+  },
+  ORG_DIVISION: {
+    defaultMessage: 'ORG Division',
+    description: 'The description for ORG_DIVISION type',
+    id: 'constants.orgDivision'
+  },
+  PERFORMANCE_MANAGEMENT: {
+    defaultMessage: 'Performance Management',
+    description: 'The description for Performance Management role',
+    id: 'constants.performanceManagement'
+  },
+  profileTitle: {
+    defaultMessage: 'Profile',
+    description: 'Profile header',
+    id: 'settings.profile.tile'
+  },
+  REGISTRATION_AGENT: {
+    defaultMessage: 'Registration Agent',
+    description: 'The description for REGISTRATION_AGENT role',
+    id: 'constants.registrationAgent'
+  },
+  SECRETARY: {
+    defaultMessage: 'Secretary',
+    description: 'The description for SECRETARY type',
+    id: 'constants.secretary'
+  },
+  securityTitle: {
+    defaultMessage: 'Security',
+    description: 'Security header',
+    id: 'settings.security.tile'
+  },
+  settingsTitle: {
+    defaultMessage: 'Settings',
+    description: 'Title of the settings page',
+    id: 'settings.title'
+  },
+  STATE_REGISTRAR: {
+    defaultMessage: 'State Registrar',
+    description: 'The description for STATE_REGISTRAR role',
+    id: 'constants.stateRegistrar'
+  },
+  API_USER: {
+    defaultMessage: 'API role',
+    description: 'The description for API_USER role',
+    id: 'constants.apiUser'
+  },
+  NOTIFICATION_API_USER: {
+    defaultMessage: 'Notification API role',
+    description: 'The description for NOTIFICATION_API_USER role',
+    id: 'constants.notificationApiUser'
+  },
+  VALIDATOR_API_USER: {
+    defaultMessage: 'Validator API role',
+    description: 'The description for VALIDATOR_API_USER role',
+    id: 'constants.validatorApiUser'
+  },
+  AGE_VERIFICATION_API_USER: {
+    defaultMessage: 'Age verificatiion API role',
+    description: 'The description for AGE_VERIFICATION_API_USER role',
+    id: 'constants.ageVerificationApiUser'
+  },
+  systemTitle: {
+    defaultMessage: 'System',
+    description: 'System header',
+    id: 'settings.system.tile'
+  },
+  currentPassword: {
+    id: 'password.label.current',
+    defaultMessage: 'Current password',
+    description: 'Current password label'
+  },
+  changePassword: {
+    defaultMessage: 'Change password',
+    description: 'Password change modal header',
+    id: 'settings.changePassword'
+  },
+  changePasswordMessage: {
+    defaultMessage: `Create a unique password - one that you don't use for other websites or applications. A secure and easy to remember passphrase could include three random words, while avoiding the use of personal info.`,
+    description: 'Password change message',
+    id: 'misc.newPass.instruction'
+  },
+  changePhoneTitle: {
+    defaultMessage: 'Change phone number',
+    description: 'Change phone number title',
+    id: 'settings.changePhone'
+  },
+  verifyPhoneTitle: {
+    defaultMessage: 'Verify phone number',
+    description: 'Verify phone number title',
+    id: 'settings.verifyPhone'
+  },
+  changePhoneLabel: {
+    defaultMessage: 'What is your new number?',
+    description: 'Change phone number label',
+    id: 'phone.label.changeNumber'
+  },
+  changeEmailLabel: {
+    defaultMessage: 'What is your new email?',
+    description: 'Change email address label',
+    id: 'phone.label.changeEmail'
+  },
+  verifyPhoneLabel: {
+    defaultMessage: 'Enter 6 digit verification code',
+    description: 'Verify phone number label',
+    id: 'phone.label.verify'
+  },
+  confirmationPhoneMsg: {
+    defaultMessage: 'Verification code has been sent to {email}',
+    description: 'Confirmation phone number message',
+    id: 'phone.label.confirmation'
+  },
+  confirmationEmailMsg: {
+    defaultMessage: 'Verification code has been sent to {email}',
+    description: 'Confirmation email address message',
+    id: 'email.label.confirmation'
+  },
+  phoneNumberChangeFormValidationMsg: {
+    id: 'changePhone.validation.msg',
+    defaultMessage: 'Must be a valid {num} digit number',
+    description: 'Phone number validation message'
+  },
+  emailAddressChangeFormValidationMsg: {
+    id: 'changeEmail.validation.msg',
+    defaultMessage: 'Must be a valid email address',
+    description: 'Phone number validation message'
+  },
+  avatarProcessingError: {
+    id: 'settings.changeAvatar.avatarProcessingError',
+    defaultMessage:
+      'There was an error processing the image. Please try again.',
+    description: 'Avatar processing error message'
+  },
+  changeAvatar: {
+    id: 'settings.changeAvatar',
+    defaultMessage: 'Change profile image',
+    description: 'Avatar change modal header'
+  },
+  changeImage: {
+    id: 'settings.changeAvatar.changeImage',
+    defaultMessage: 'Change image',
+    description: 'Change image label'
+  },
+  resizeAvatar: {
+    id: 'settings.changeAvatar.resizeAvatar',
+    defaultMessage: 'Resize and position the chosen image.',
+    description: 'Avatar resize and position message'
+  },
+  newPasswordLabel: {
+    id: 'password.label.new',
+    defaultMessage: 'New password:',
+    description: 'New password label'
+  },
+  passwordUpdateFormValidationMsg: {
+    id: 'password.validation.msg',
+    defaultMessage: 'Password must have:',
+    description: 'Password validation message'
+  },
+  passwordLengthCharacteristicsForPasswordUpdateForm: {
+    id: 'password.minLength',
+    defaultMessage: '{min} characters minimum',
+    description: 'Password validation'
+  },
+  passwordCaseCharacteristicsForPasswordUpdateForm: {
+    id: 'password.cases',
+    defaultMessage: 'At least one upper and lower case character',
+    description: 'Password validation'
+  },
+  passwordNumberCharacteristicsForPasswordUpdateForm: {
+    id: 'password.number',
+    defaultMessage: 'At least one number',
+    description: 'Password validation'
+  },
+  confirmPasswordLabel: {
+    id: 'password.label.confirm',
+    defaultMessage: 'Confirm new password',
+    description: 'Confirm password label'
+  },
+  matchedPasswordMsg: {
+    id: 'password.match',
+    defaultMessage: 'Passwords match',
+    description: 'Password validation'
+  },
+  mismatchedPasswordMsg: {
+    id: 'password.mismatch',
+    defaultMessage: 'Passwords do not match',
+    description: 'Password validation'
+  },
+  confirmButtonLabel: {
+    id: 'buttons.confirm',
+    defaultMessage: 'Confirm',
+    description: 'Label used for confirm button'
+  },
+  requiredfield: {
+    id: 'register.form.required',
+    defaultMessage: 'This field is required',
+    description: 'Required field error message'
+  },
+  incorrectPassword: {
+    id: 'system.user.settings.incorrectPassword',
+    defaultMessage: 'Current password incorrect. Please try again.',
+    description: 'Response message for incorrect password for password change'
+  },
+  incorrectVerifyCode: {
+    id: 'system.user.settings.incorrectVerifyCode',
+    defaultMessage: 'Verify code incorrect. Please try again.',
+    description:
+      'Response message for incorrect Verify code for phone number change'
+  },
+  passwordUpdated: {
+    id: 'system.user.settings.passwordUpdated',
+    defaultMessage: 'Password was successfully changed',
+    description: 'Password change message on success'
+  },
+  phoneNumberUpdated: {
+    id: 'system.user.settings.phonedNumberUpdated',
+    defaultMessage: 'Phone number updated',
+    description: 'Phone change message on success'
+  },
+  emailAddressUpdated: {
+    id: 'system.user.settings.emailAddressUpdated',
+    defaultMessage: 'Email Address updated',
+    description: 'Email change message on success'
+  },
+  avatarUpdating: {
+    id: 'system.user.settings.avatarUpdating',
+    defaultMessage: 'Updating profile image',
+    description: 'Profile image message when uploading'
+  },
+  avatarUpdated: {
+    id: 'system.user.settings.avatarUpdated',
+    defaultMessage: 'Profile image successfully updated',
+    description: 'Profile image change message on success'
+  },
+  name: {
+    id: 'system.user.settings.name',
+    defaultMessage: 'Name',
+    description: 'label for Name'
+  },
+  systemLanguage: {
+    id: 'system.user.settings.systemLanguage',
+    defaultMessage: 'System language',
+    description: 'Label for system language'
+  },
+  language: {
+    id: 'system.user.settings.language',
+    defaultMessage: '{language}'
+  },
+  profileImage: {
+    id: 'system.user.settings.profileImage',
+    defaultMessage: 'Profile Image',
+    description: 'Label for profile image'
+  },
+  duplicateUserMobileErrorMessege: {
+    defaultMessage:
+      '{number} is already used by another user. Please use a different phone number',
+    description:
+      'This error messege shows when user try to input already exsisted mobile number',
+    id: 'system.user.duplicateMobileError'
+  },
+  mobileNumberUnchangedErrorMessege: {
+    defaultMessage:
+      'This is already your phone number. Please enter a different phone number',
+    description:
+      'Error message shown when the user enters their current phone number as the new phone number',
+    id: 'system.user.mobileNumberUnchangedError'
+  },
+  duplicateUserEmailErrorMessege: {
+    defaultMessage:
+      '{email} is already used by another user. Please use a different email',
+    description:
+      'This error message shows when user tries to input an already existing email',
+    id: 'system.user.duplicateEmailError'
+  },
+  emailAddressUnchangedErrorMessege: {
+    defaultMessage:
+      'This is already your email address. Please enter a different email address',
+    description:
+      'Error message shown when the user enters their current email address as the new email address',
+    id: 'system.user.emailAddressUnchangedError'
+  },
+  enterPinLabel: {
+    id: 'system.user.unlock.pinLabel',
+    defaultMessage: 'Enter your pin',
+    description: 'Label for entering unlock user profile'
+  }
+})

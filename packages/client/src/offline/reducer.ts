@@ -1,0 +1,526 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import {
+  loop,
+  Cmd,
+  Loop,
+  liftState,
+  getModel,
+  getCmd,
+  RunCmd
+} from 'redux-loop'
+import * as actions from '@client/offline/actions'
+import * as profileActions from '@client/profile/profileActions'
+import { storage } from '@client/storage'
+import {
+  IApplicationConfigAnonymous,
+  ILocationDataResponse,
+  referenceApi,
+  CertificateConfiguration,
+  IFacilitiesDataResponse,
+  IOfficesDataResponse,
+  ICertificateData
+} from '@client/utils/referenceApi'
+import { ILanguage } from '@client/i18n/reducer'
+import { filterLocations } from '@client/utils/locationUtils'
+import { UserDetails } from '@client/utils/userUtils'
+import { isOfflineDataLoaded } from './selectors'
+import { merge } from 'lodash'
+import { isNavigatorOnline } from '@client/utils'
+import { initHandlebarHelpers } from '@client/forms/handlebarHelpers'
+import {
+  Action as NotificationAction,
+  configurationErrorNotification
+} from '@client/notification/actions'
+import { getToken } from '@client/utils/authUtils'
+import { ApplicationConfig } from '@opencrvs/commons/client'
+
+export interface ILocation {
+  id: string
+  name: string
+  status: string
+  alias: string
+  physicalType: string
+  jurisdictionType?: string
+  statisticalId: string
+  type: string
+  partOf: string
+}
+
+type JurisdictionType =
+  | 'STATE'
+  | 'DISTRICT'
+  | 'LOCATION_LEVEL_3'
+  | 'LOCATION_LEVEL_4'
+  | 'LOCATION_LEVEL_5'
+
+export interface AdminStructure extends ILocation {
+  type: string
+  jurisdictionType: JurisdictionType
+  physicalType: string
+}
+
+export interface Facility extends ILocation {
+  type: string
+  physicalType: string
+}
+
+export interface CRVSOffice extends ILocation {
+  type: string
+  physicalType: string
+}
+
+export interface IOfflineData {
+  locations: ILocationDataResponse
+  facilities: IFacilitiesDataResponse
+  activeFacilities: IFacilitiesDataResponse
+  offices: IOfficesDataResponse
+  activeOffices: IOfficesDataResponse
+  languages: ILanguage[]
+  templates: {
+    fonts?: CertificateConfiguration['fonts']
+    // TODO: Certificates need to be restricted in the case of
+    // a user who does not have permission to print certificate
+    // (ex: a field agent using the app)
+    certificates: ICertificateData[]
+  }
+  assets: {
+    logo: string
+  }
+  config: ApplicationConfig
+  anonymousConfig: IApplicationConfigAnonymous
+}
+
+export type IOfflineDataState = {
+  offlineData: Partial<IOfflineData>
+  offlineDataLoaded: boolean
+  loadingError: boolean
+  userDetails?: UserDetails
+}
+
+type Action = actions.Action | NotificationAction
+
+const initialState: IOfflineDataState = {
+  offlineData: {},
+  offlineDataLoaded: false,
+  loadingError: false
+}
+
+async function saveOfflineData(offlineData: IOfflineData) {
+  return storage.setItem('offline', JSON.stringify(offlineData))
+}
+
+async function loadSingleCertificate(certificate: ICertificateData) {
+  const { id } = certificate
+  const res = await fetch(certificate.svgUrl, {
+    headers: {
+      Authorization: getToken(),
+      'If-None-Match': certificate?.hash ?? ''
+    }
+  })
+  if (res.status === 304) {
+    return {
+      ...certificate,
+      svg: certificate.svg,
+      hash: certificate!.hash!
+    }
+  }
+  if (!res.ok) {
+    return Promise.reject(
+      new Error(`Fetching certificate with id: "${id}" failed`)
+    )
+  }
+  return res.text().then((svg) => {
+    return {
+      ...certificate,
+      svg,
+      hash: res.headers.get('etag')!
+    }
+  })
+}
+
+async function loadCertificates(
+  savedCertificates: IOfflineData['templates']['certificates']
+) {
+  return await Promise.all(
+    savedCertificates.map((cert) => loadSingleCertificate(cert))
+  )
+}
+
+function checkIfDone(
+  oldState: IOfflineDataState,
+  loopOrState: IOfflineDataState | Loop<IOfflineDataState, Action>
+) {
+  const loopWithState = liftState(loopOrState)
+  const newState = getModel(loopWithState)
+  const cmd = getCmd(loopWithState)
+  if (
+    isOfflineDataLoaded(newState.offlineData) &&
+    !oldState.offlineDataLoaded
+  ) {
+    return loop(
+      { ...newState, offlineDataLoaded: true },
+      Cmd.list([
+        ...(cmd ? [cmd] : []),
+        Cmd.run(saveOfflineData, { args: [newState.offlineData] }),
+        Cmd.action(actions.offlineDataReady(newState.offlineData))
+      ])
+    )
+  }
+
+  if (
+    /*
+     * Data was updated with a fresh version from offlineCountryConfig
+     */
+    isOfflineDataLoaded(oldState.offlineData) &&
+    isOfflineDataLoaded(newState.offlineData) &&
+    oldState.offlineData !== newState.offlineData
+  ) {
+    return loop(
+      newState,
+      Cmd.list([
+        ...(cmd ? [cmd] : []),
+        Cmd.run(saveOfflineData, { args: [newState.offlineData] }),
+        Cmd.action(actions.offlineDataUpdated(newState.offlineData))
+      ])
+    )
+  }
+
+  return loopWithState
+}
+
+const FACILITIES_CMD = Cmd.run(() => referenceApi.loadFacilities(), {
+  successActionCreator: actions.facilitiesLoaded,
+  failActionCreator: actions.facilitiesFailed
+})
+
+const LOCATIONS_CMD = Cmd.run(() => referenceApi.loadLocations(), {
+  successActionCreator: actions.locationsLoaded,
+  failActionCreator: actions.locationsFailed
+})
+
+const CONFIG_CMD = Cmd.run(() => referenceApi.loadConfig(), {
+  successActionCreator: actions.configLoaded,
+  failActionCreator: actions.configFailed
+})
+
+const CONTENT_CMD = Cmd.run(() => referenceApi.loadContent(), {
+  successActionCreator: actions.contentLoaded,
+  failActionCreator: actions.contentFailed
+})
+
+const HANDLEBARS_CMD = Cmd.run(() => initHandlebarHelpers(), {
+  successActionCreator: actions.handlebarsLoaded,
+  failActionCreator: actions.handlebarsFailed
+})
+
+const RETRY_TIMEOUT = 5000
+/* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+function delay(cmd: RunCmd<any>, time: number) {
+  return Cmd.list(
+    [Cmd.run(() => new Promise((resolve) => setTimeout(resolve, time))), cmd],
+    { sequence: true }
+  )
+}
+
+function getDataLoadingCommands() {
+  return Cmd.list<actions.Action>([CONFIG_CMD, HANDLEBARS_CMD, CONTENT_CMD])
+}
+
+function updateGlobalConfig() {
+  return Cmd.run(() => {
+    // Replaces the script tag in site head with a fresh one
+    const currentConfigElement = Array.from(
+      document.querySelectorAll('script')
+    ).find(({ src }) => src.indexOf('config.js'))!
+    const head = document.getElementsByTagName('head')[0]
+    const newConfigElement = document.createElement('script')
+    newConfigElement.src = currentConfigElement.src.replace(
+      /\?.*/,
+      '?cachebuster=' + Date.now()
+    )
+    head.appendChild(newConfigElement)
+    head.removeChild(currentConfigElement)
+  })
+}
+
+/*
+ * If offline data is already stored, but we're just not able to update it
+ * we retry, but do not show the user an error
+ */
+function errorIfDataNotLoaded(state: IOfflineDataState) {
+  return !isOfflineDataLoaded(state.offlineData)
+}
+
+function reducer(
+  state: IOfflineDataState,
+  action: actions.Action | profileActions.Action
+): IOfflineDataState | Loop<IOfflineDataState, Action> {
+  switch (action.type) {
+    // ENTRYPOINT - called from profile reducer
+    case profileActions.USER_DETAILS_AVAILABLE: {
+      return loop(
+        { ...state, userDetails: action.payload },
+        Cmd.run(storage.getItem, {
+          args: ['offline'],
+          successActionCreator: actions.getOfflineDataSuccess,
+          // @todo this action isn't handled
+          failActionCreator: actions.getOfflineDataFailed
+        })
+      )
+    }
+    case actions.REFRESH_OFFLINE_DATA: {
+      return loop(
+        state,
+        Cmd.list([getDataLoadingCommands(), updateGlobalConfig()])
+      )
+    }
+    case actions.ANONYMOUS_USER_OFFLINE_CONFIG: {
+      return {
+        ...state,
+        offlineData: {
+          ...state.offlineData,
+          ...action.payload
+        }
+      }
+    }
+    case actions.GET_OFFLINE_DATA_SUCCESS: {
+      const offlineDataString = action.payload
+      const offlineData: IOfflineData = JSON.parse(
+        offlineDataString ? offlineDataString : '{}'
+      )
+
+      const dataLoadingCmds = getDataLoadingCommands()
+      const offlineDataLoaded = isOfflineDataLoaded(offlineData)
+      if (offlineDataLoaded) {
+        return loop(
+          {
+            ...state,
+            offlineData,
+            offlineDataLoaded
+          },
+          Cmd.list([
+            // Try loading data regardless as it might have been updated.
+            isNavigatorOnline() ? dataLoadingCmds : Cmd.none
+          ])
+        )
+      }
+      return loop(state, dataLoadingCmds)
+    }
+
+    case actions.UPDATE_OFFLINE_CONFIG: {
+      merge(window.config, action.payload.config)
+      const newOfflineData = {
+        ...state.offlineData,
+        config: action.payload.config
+      }
+
+      return loop(
+        {
+          ...state,
+          offlineData: newOfflineData
+        },
+        Cmd.run(saveOfflineData, { args: [newOfflineData] })
+      )
+    }
+    /*
+     * Configurations
+     */
+    case actions.APPLICATION_CONFIG_LOADED: {
+      const { certificates, config } = action.payload
+      merge(window.config, config)
+
+      const newOfflineData = {
+        ...state.offlineData,
+        config,
+        templates: {
+          ...state.offlineData.templates,
+          certificates: (certificates as ICertificateData[]).map((x) => {
+            const baseUrl = window.location.origin
+            if (x.fonts) {
+              x.fonts = Object.fromEntries(
+                Object.entries(x.fonts).map(([fontFamily, fontStyles]) => [
+                  fontFamily,
+                  {
+                    normal: `${baseUrl}${fontStyles.normal}`,
+                    bold: `${baseUrl}${fontStyles.bold}`,
+                    italics: `${baseUrl}${fontStyles.italics}`,
+                    bolditalics: `${baseUrl}${fontStyles.bolditalics}`
+                  }
+                ])
+              )
+            }
+            return x
+          })
+        }
+      }
+
+      return loop(
+        {
+          ...state,
+          offlineDataLoaded: isOfflineDataLoaded(newOfflineData),
+          offlineData: newOfflineData
+        },
+        Cmd.run(loadCertificates, {
+          successActionCreator: actions.certificatesLoaded,
+          args: [newOfflineData.templates?.certificates]
+        })
+      )
+    }
+
+    case actions.CERTIFICATES_LOADED: {
+      const certificates = action.payload
+      return {
+        ...state,
+        offlineData: {
+          ...state.offlineData,
+          templates: {
+            ...state.offlineData.templates,
+            certificates
+          }
+        }
+      }
+    }
+
+    case actions.APPLICATION_CONFIG_FAILED: {
+      const payload = action.payload
+      if (payload.cause === 'VALIDATION_ERROR') {
+        return loop(
+          {
+            ...state,
+            loadingError: errorIfDataNotLoaded(state)
+          },
+          Cmd.action(
+            configurationErrorNotification(
+              payload.message + ' to load application configuration properly'
+            )
+          )
+        )
+      }
+      return loop(
+        {
+          ...state,
+          loadingError: errorIfDataNotLoaded(state)
+        },
+        delay(CONFIG_CMD, RETRY_TIMEOUT)
+      )
+    }
+
+    /*
+     * Definitions
+     */
+
+    case actions.CONTENT_LOADED: {
+      return {
+        ...state,
+        offlineData: {
+          ...state.offlineData,
+          languages: action.payload.languages
+        }
+      }
+    }
+    case actions.CONTENT_FAILED: {
+      return loop(
+        {
+          ...state,
+          loadingError: errorIfDataNotLoaded(state)
+        },
+        delay(CONTENT_CMD, RETRY_TIMEOUT)
+      )
+    }
+
+    /*
+     * Locations
+     */
+
+    case actions.LOCATIONS_LOADED: {
+      return {
+        ...state,
+        offlineData: {
+          ...state.offlineData,
+          locations: action.payload
+        }
+      }
+    }
+    case actions.LOCATIONS_FAILED: {
+      return loop(
+        {
+          ...state,
+          loadingError: errorIfDataNotLoaded(state)
+        },
+        delay(LOCATIONS_CMD, RETRY_TIMEOUT)
+      )
+    }
+    /*
+     * Facilities && Offices
+     */
+
+    case actions.FACILITIES_LOADED: {
+      const facilities = filterLocations(action.payload, 'HEALTH_FACILITY')
+      const activeFacilities = Object.fromEntries(
+        Object.entries(facilities).filter(
+          ([, facility]) => facility.status === 'active'
+        )
+      )
+
+      const offices = filterLocations(action.payload, 'CRVS_OFFICE')
+      const activeOffices = Object.fromEntries(
+        Object.entries(offices).filter(
+          ([, office]) => office.status === 'active'
+        )
+      )
+
+      return {
+        ...state,
+        offlineData: {
+          ...state.offlineData,
+          facilities,
+          activeFacilities,
+          offices,
+          activeOffices
+        }
+      }
+    }
+    case actions.FACILITIES_FAILED: {
+      return loop(
+        {
+          ...state,
+          loadingError: errorIfDataNotLoaded(state)
+        },
+        delay(FACILITIES_CMD, RETRY_TIMEOUT)
+      )
+    }
+
+    case actions.READY: {
+      const offlineDataLoaded = isOfflineDataLoaded(action.payload)
+      return {
+        ...state,
+        loadingError: false,
+        offlineData: action.payload,
+        offlineDataLoaded
+      }
+    }
+
+    default:
+      return state
+  }
+}
+
+export function offlineDataReducer(
+  state: IOfflineDataState | undefined = initialState,
+  action: actions.Action
+): IOfflineDataState | Loop<IOfflineDataState, Action> {
+  const newState = reducer(state, action)
+  if (action.type !== actions.READY) {
+    return checkIfDone(state, newState)
+  }
+  return newState
+}

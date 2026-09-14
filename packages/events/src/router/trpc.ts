@@ -1,0 +1,206 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import { initTRPC, TRPCError } from '@trpc/server'
+import superjson from 'superjson'
+import { OpenApiMeta } from 'trpc-to-openapi'
+import { DefaultErrorShape } from '@trpc/server/unstable-core-do-not-import'
+import { logger, TokenUserType } from '@opencrvs/commons'
+import {
+  TrpcContext,
+  ServiceTrpcContext,
+  verifyInternalServiceToken,
+  verifyInitialisationToken
+} from '@events/context'
+import { env } from '@events/environment'
+import { canInitialiseSystem } from './middleware'
+
+/**
+ * Niger : forme attendue de `TRPCError.cause` pour un conflit d'assignation
+ * (`requireAssignment`, packages/events/src/router/middleware/authorization).
+ * Validée avant d'être recopiée dans la réponse — `cause` peut porter
+ * n'importe quoi selon le code qui a levé l'erreur, on ne fait pas confiance
+ * à sa forme par défaut.
+ */
+function extractLockedBy(cause: unknown) {
+  if (
+    typeof cause === 'object' &&
+    cause !== null &&
+    'lockedBy' in cause &&
+    typeof (cause as { lockedBy: unknown }).lockedBy === 'object' &&
+    (cause as { lockedBy: unknown }).lockedBy !== null
+  ) {
+    const lockedBy = (cause as { lockedBy: { id?: unknown; name?: unknown } })
+      .lockedBy
+    if (typeof lockedBy.id === 'string' && typeof lockedBy.name === 'string') {
+      return lockedBy as { id: string; name: string; officeName?: string }
+    }
+  }
+  return undefined
+}
+
+function errorFormatter({
+  shape,
+  error
+}: {
+  shape: DefaultErrorShape
+  error: TRPCError
+}) {
+  // If received unhandled error, don't leak the error message or stack trace in the response.
+  // This is a security measure: the message or stack trace could contain internal technical details etc. sensitive information.
+  if (error.code === 'INTERNAL_SERVER_ERROR' && env.isProduction) {
+    return {
+      ...shape,
+      message: 'Internal server error',
+      data: { code: shape.data.code, httpStatus: shape.data.httpStatus }
+    }
+  }
+
+  if (error.code === 'CONFLICT') {
+    const lockedBy = extractLockedBy(error.cause)
+    if (lockedBy) {
+      return { ...shape, data: { ...shape.data, lockedBy } }
+    }
+  }
+
+  // Keep all other errors as is.
+  return shape
+}
+
+export const t = initTRPC
+  .context<Partial<TrpcContext>>()
+  .meta<OpenApiMeta>()
+  .create({
+    transformer: superjson,
+    errorFormatter
+  })
+
+export const tService = initTRPC.context<ServiceTrpcContext>().create({
+  transformer: superjson,
+  errorFormatter
+})
+
+export const router = t.router
+export const serviceRouter = tService.router
+
+export const internalProcedure = tService.procedure.use(async (opts) => {
+  const { token } = opts.ctx
+  try {
+    verifyInternalServiceToken(token)
+    return await opts.next({
+      ctx: {
+        ...opts.ctx,
+        token
+      }
+    })
+  } catch {
+    throw new TRPCError({ code: 'UNAUTHORIZED' })
+  }
+})
+
+/**
+ * Procedure which ensures initialisation is not completed yet.
+ * This is used for all initialisation routes to ensure they can only be accessed before the system has been initialised.
+ */
+export const initialisationProcedure = tService.procedure
+  .use(async (opts) => {
+    const { token } = opts.ctx
+    try {
+      verifyInitialisationToken(token)
+      return await opts.next({
+        ctx: {
+          ...opts.ctx,
+          token
+        }
+      })
+    } catch {
+      throw new TRPCError({ code: 'UNAUTHORIZED' })
+    }
+  })
+  .use(canInitialiseSystem())
+
+const authedProcedure = t.procedure.use(async (opts) => {
+  const { token, user } = opts.ctx
+  if (!token) {
+    throw new TRPCError({
+      code: 'UNAUTHORIZED',
+      message: 'Authorization token is missing'
+    })
+  }
+  if (!user) {
+    throw new TRPCError({
+      code: 'UNAUTHORIZED',
+      message: 'Authentication failed'
+    })
+  }
+
+  return opts.next({
+    ctx: {
+      ...opts.ctx,
+      token,
+      user
+    }
+  })
+})
+
+/** @knipignore */
+export const publicProcedure = t.procedure
+
+/**
+ * Procedures that are available to both system (API key) users and
+ * human users depending on the scopes they have
+ */
+export const userAndSystemProcedure = authedProcedure
+
+/**
+ * Procedures that are only available to human users
+ * and will throw an error if a system user tries to access them
+ */
+export const userOnlyProcedure = authedProcedure.use(async (opts) => {
+  const { user } = opts.ctx
+
+  if (user.type === TokenUserType.enum.system) {
+    logger.error(
+      `System user tried to access public procedure. User id: '${user.id}'`
+    )
+    throw new TRPCError({ code: 'FORBIDDEN' })
+  }
+
+  return opts.next({
+    ctx: {
+      ...opts.ctx,
+      user
+    }
+  })
+})
+
+
+/**
+ * Procedures that are only available to system (API key) users
+ * and will throw an error if a human user tries to access them
+ */
+export const systemOnlyProcedure = authedProcedure.use(async (opts) => {
+  const { user } = opts.ctx
+
+  if (user.type !== TokenUserType.enum.system) {
+    logger.error(
+      `Non-system user tried to access system-only procedure. User id: '${user.id}'`
+    )
+    throw new TRPCError({ code: "FORBIDDEN" })
+  }
+
+  return opts.next({
+    ctx: {
+      ...opts.ctx,
+      user
+    }
+  })
+})

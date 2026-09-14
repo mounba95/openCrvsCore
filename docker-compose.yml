@@ -1,0 +1,130 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# OpenCRVS is also distributed under the terms of the Civil Registration
+# & Healthcare Disclaimer located at http://opencrvs.org/license.
+#
+# Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+services:
+  base:
+    image: ghcr.io/opencrvs/ocrvs-base:${VERSION}
+    #platform: linux/amd64
+    build:
+      context: .
+      dockerfile: ./packages/Dockerfile.base
+    deploy:
+      replicas: 0
+  client:
+    image: ghcr.io/opencrvs/ocrvs-client:${VERSION}
+    #platform: linux/amd64
+    build:
+      context: .
+      dockerfile: ./packages/client/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - base
+    environment:
+      - COUNTRY_CONFIG_URL_INTERNAL=http://countryconfig:3040
+      - LOGIN_URL=http://login:3020
+      - AUTH_URL_INTERNAL=http://auth:4040
+      - GATEWAY_URL_INTERNAL=http://gateway:7070
+  login:
+    image: ghcr.io/opencrvs/ocrvs-login:${VERSION}
+    #platform: linux/amd64
+    build:
+      context: .
+      dockerfile: ./packages/login/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - base
+    environment:
+      - COUNTRY_CONFIG_URL_INTERNAL=http://countryconfig:3040
+      - CLIENT_APP_URL=http://register:3000
+      - AUTH_URL_INTERNAL=http://auth:4040
+      - GATEWAY_URL_INTERNAL=http://gateway:7070
+  gateway:
+    image: ghcr.io/opencrvs/ocrvs-gateway:${VERSION}
+    #platform: linux/amd64
+    build:
+      context: .
+      dockerfile: ./packages/gateway/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - base
+    environment:
+      - HOST=0.0.0.0
+      - REDIS_HOST=redis
+      - CONFIG_SMS_CODE_EXPIRY_SECONDS=600
+      - CONFIG_TOKEN_EXPIRY_SECONDS=604800
+      - NODE_ENV=development
+      - EVENTS_URL=http://events:5555/
+      - AUTH_URL=http://auth:4040
+      - COUNTRY_CONFIG_URL=http://countryconfig:3040
+      - CHECK_INVALID_TOKEN=true
+      - DOCUMENTS_URL=http://documents:9050
+  events:
+    image: ghcr.io/opencrvs/ocrvs-events:${VERSION}
+    #platform: linux/amd64
+    build:
+      context: .
+      dockerfile: ./packages/events/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - base
+    environment:
+      - ES_URL=http://elasticsearch:9200
+      - COUNTRY_CONFIG_URL=http://countryconfig:3040
+      - DOCUMENTS_URL=http://documents:9050
+      - AUTH_URL=http://auth:4040
+  auth:
+    image: ghcr.io/opencrvs/ocrvs-auth:${VERSION}
+    #platform: linux/amd64
+    build:
+      context: .
+      dockerfile: ./packages/auth/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - base
+    environment:
+      - REDIS_HOST=redis
+      - EVENTS_URL=http://events:5555/
+      - CONFIG_TOKEN_EXPIRY_SECONDS=604800
+      - CONFIG_SMS_CODE_EXPIRY_SECONDS=600
+      - COUNTRY_CONFIG_URL_INTERNAL=http://countryconfig:3040
+  migration:
+    image: ghcr.io/opencrvs/ocrvs-migration:${VERSION}
+    #platform: linux/amd64
+    build:
+      context: .
+      dockerfile: ./packages/migration/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - base
+    environment:
+      - WAIT_HOSTS=postgres:5432
+  documents:
+    image: ghcr.io/opencrvs/ocrvs-documents:${VERSION}
+    #platform: linux/amd64
+    build:
+      context: .
+      dockerfile: ./packages/documents/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - base
+    environment:
+      - NODE_ENV=development
+      - COUNTRY_CONFIG_URL=http://countryconfig:3040
+  data-seeder:
+    image: ghcr.io/opencrvs/ocrvs-data-seeder:${VERSION}
+    #platform: linux/amd64
+    build:
+      context: .
+      dockerfile: ./packages/data-seeder/Dockerfile
+    depends_on:
+      - base
+    deploy:
+      replicas: 0
+    environment:
+      - EVENTS_URL=http://events:5555/
+      - AUTH_URL=http://auth:4040/

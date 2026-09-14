@@ -1,0 +1,82 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import { TRPCError } from '@trpc/server'
+import { getAcceptedScopesFromToken, TokenWithBearer } from '@opencrvs/commons'
+import {
+  ActionStatus,
+  ActionType,
+  findLastAssignmentAction,
+  getCurrentEventState,
+  UnassignActionInput,
+  userCanAccessEventWithScopes
+} from '@opencrvs/commons/events'
+import { TrpcUserContext } from '@events/context'
+import { getEventConfigurationById } from '@events/service/config/config'
+import { getEventById, processAction } from '@events/service/events/events'
+import { getEventIndexWithAdministrativeHierarchy } from '@events/service/indexing/utils'
+
+export async function unassignRecord({
+  input,
+  user,
+  token
+}: {
+  input: UnassignActionInput
+  user: TrpcUserContext
+  token: TokenWithBearer
+}) {
+  const event = await getEventById(input.eventId)
+  const configuration = await getEventConfigurationById({
+    token,
+    eventType: event.type
+  })
+
+  const lastAssignmentAction = findLastAssignmentAction(event.actions)
+
+  // If last assignment action is not 'ASSIGN', simply return the event as it's already unassigned
+  if (lastAssignmentAction?.type !== ActionType.ASSIGN) {
+    return event
+  }
+
+  // If event is not assigned to the user who is unassigning, we need to ensure that the user may unassign others
+  if (lastAssignmentAction.assignedTo !== user.id) {
+    // Ensure that the user has scope to unassign users from this event type
+    const acceptedScopes = getAcceptedScopesFromToken(token, [
+      'record.unassign-others'
+    ])
+
+    if (acceptedScopes.length === 0) {
+      throw new TRPCError({ code: 'FORBIDDEN' })
+    }
+
+    const eventIndex = getCurrentEventState(event, configuration)
+    const eventIndexWithLocationHierarchy =
+      await getEventIndexWithAdministrativeHierarchy(configuration, eventIndex)
+
+    const hasAccess = userCanAccessEventWithScopes(
+      eventIndexWithLocationHierarchy,
+      acceptedScopes,
+      user
+    )
+
+    if (!hasAccess) {
+      throw new TRPCError({ code: 'FORBIDDEN' })
+    }
+  }
+
+  return processAction(input, {
+    eventId: event.id,
+    user,
+    token,
+    status: ActionStatus.Accepted,
+    configuration
+  })
+}

@@ -1,0 +1,200 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import { hashValues, route, string } from 'react-router-typesafe-routes/dom'
+import { zod } from 'react-router-typesafe-routes/zod'
+import * as z from 'zod'
+import {
+  requestRoutes as correctionRequestRoutes,
+  reviewRoutes as correctionReviewRoutes
+} from '@client/v2-events/features/events/actions/correct/request/routes'
+import { routes as workqueueRoutes } from '@client/v2-events/features/workqueues/routes'
+import { uuid } from './utils'
+
+export const ROUTES = {
+  V2: route(
+    '',
+    {},
+    {
+      EVENTS: route(
+        'events',
+        {},
+        {
+          EVENT: route(
+            ':eventId',
+            {
+              params: { eventId: uuid().defined() },
+              searchParams: {
+                backTo: string()
+              }
+            },
+            {
+              RECORD: route('record', {
+                searchParams: {
+                  backTo: string()
+                }
+              }),
+              AUDIT: route('audit', {
+                searchParams: {
+                  backTo: string()
+                }
+              })
+            }
+          ),
+          CREATE: route('create', {
+            searchParams: {
+              backTo: string(),
+              // Groupe d'acte (naissance/mariage/décès/divorce) pré-sélectionné
+              // depuis les cartes de création affichées directement sur la
+              // page d'accueil (voir `actGroups.tsx`/`CreateEventCards.tsx`) —
+              // permet de sauter directement au sous-menu des modèles.
+              group: string()
+            }
+          }),
+          DELETE: route('delete/:eventId', {
+            searchParams: {
+              backTo: string()
+            }
+          }),
+          DECLARE: route(
+            'declare/:eventId',
+            {
+              params: { eventId: uuid().defined() },
+              searchParams: { backTo: string() }
+            },
+            {
+              REVIEW: route('review', {
+                searchParams: { backTo: string() }
+              }),
+              PAGES: route('pages/:pageId', {
+                params: { pageId: string() },
+                searchParams: {
+                  from: string(),
+                  backTo: string()
+                },
+                hash: hashValues()
+              })
+            }
+          ),
+          EDIT: route(
+            'edit/:eventId',
+            {
+              params: { eventId: uuid().defined() },
+              searchParams: { backTo: string() }
+            },
+            {
+              REVIEW: route('review', {
+                searchParams: { backTo: string() }
+              }),
+              PAGES: route('pages/:pageId', {
+                params: { pageId: string() },
+                searchParams: {
+                  from: string(),
+                  backTo: string()
+                },
+                hash: hashValues()
+              })
+            }
+          ),
+          PRINT_CERTIFICATE: route(
+            'print-certificate/:eventId',
+            {
+              params: { eventId: uuid().defined() },
+              searchParams: {
+                backTo: string()
+              }
+            },
+            {
+              PAGES: route('pages/:pageId', {
+                params: { pageId: string() },
+                searchParams: {
+                  from: string(),
+                  backTo: string()
+                },
+                hash: hashValues()
+              }),
+              REVIEW: route('review', {
+                searchParams: {
+                  templateId: string(),
+                  backTo: string()
+                }
+              })
+            }
+          ),
+          REVIEW_POTENTIAL_DUPLICATE: route('review-duplicate/:eventId', {
+            params: { eventId: uuid().defined() },
+            searchParams: {
+              backTo: string()
+            }
+          }),
+          REQUEST_CORRECTION: correctionRequestRoutes,
+          REVIEW_CORRECTION: correctionReviewRoutes
+        }
+      ),
+      DASHBOARD: route('performance/dashboard/:id', {
+        params: { id: string().defined() }
+      }),
+      STATISTICS: route('performance/statistics'),
+      // Niger : catalogue de rapports statistiques génératifs (PDF
+      // personnalisé par période), calqué sur "Liste des états statistiques
+      // disponibles" d'INCI — voir StatisticsReportsPage.tsx.
+      STATISTICS_REPORTS: route('performance/statistics-reports'),
+      WORKQUEUES: workqueueRoutes,
+      ADVANCED_SEARCH: route('advanced-search'),
+      SEARCH: route('search', {
+        searchParams: {
+          limit: zod(z.number().min(1).max(100)).default(10),
+          offset: zod(z.number().min(0)).default(0)
+        }
+      }),
+      SETTINGS: route(
+        'settings',
+        {},
+        {
+          USER: route(
+            'users',
+            {},
+            {
+              CREATE: route('create', {
+                searchParams: {
+                  officeId: uuid().defined(),
+                  from: string()
+                }
+              }),
+              VIEW: route(':userId/view', {
+                params: {
+                  userId: uuid().defined()
+                }
+              }),
+              REVIEW: route(':userId/review', {
+                params: {
+                  userId: uuid().defined()
+                },
+                searchParams: {
+                  from: string()
+                }
+              }),
+              EDIT: route(':userId/edit/:pageId', {
+                params: {
+                  userId: uuid().defined(),
+                  pageId: string()
+                },
+                searchParams: {
+                  from: string()
+                }
+              })
+            }
+          )
+        }
+      )
+    }
+  )
+}

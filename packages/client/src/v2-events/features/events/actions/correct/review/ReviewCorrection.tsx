@@ -1,0 +1,413 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import React from 'react'
+import styled from 'styled-components'
+import { defineMessages, useIntl } from 'react-intl'
+import {
+  useTypedParams,
+  useTypedSearchParams
+} from 'react-router-typesafe-routes/dom'
+import { useNavigate } from 'react-router-dom'
+import {
+  ActionType,
+  EventState,
+  generateTransactionId,
+  getActionConfig,
+  getCurrentEventState,
+  isActionEnabled,
+  isActionVisible,
+  RequestedCorrectionAction,
+  ValidatorContext
+} from '@opencrvs/commons/client'
+import { Dialog } from '@opencrvs/components/lib/Dialog/Dialog'
+import {
+  Button,
+  Content,
+  ContentSize,
+  Icon,
+  InputField,
+  Stack,
+  Text,
+  TextArea
+} from '@opencrvs/components'
+import { buttonMessages } from '@client/i18n/messages/buttons'
+import { ROUTES } from '@client/v2-events/routes'
+import { useModal } from '@client/v2-events/hooks/useModal'
+import { useActionAnnotation } from '@client/v2-events/features/events/useActionAnnotation'
+import { useEvents } from '@client/v2-events/features/events/useEvents/useEvents'
+import { CorrectionDetails } from '@client/v2-events/features/events/actions/correct/request/Summary/CorrectionDetails'
+import { useUserAllowedActions } from '@client/v2-events/features/workqueues/Actions/useUserAllowedActions'
+import { useEventConfiguration } from '../../../useEventConfiguration'
+
+const reviewCorrectionMessages = defineMessages({
+  actionModalCancel: {
+    id: 'actionModal.cancel',
+    defaultMessage: 'Cancel',
+    description: 'The label for cancel button of action modal'
+  },
+  actionModalDescription: {
+    id: 'actionModal.description',
+    defaultMessage:
+      'The informant will be notified of this decision and a record of this decision will be recorded.',
+    description: 'The description for action modal'
+  },
+  rejectModalDescription: {
+    id: 'correction.correctionReject.description',
+    defaultMessage:
+      'Rejecting this correction request will leave the original record unchanged. A reason for rejection should be provided.',
+    description: 'The description for reject correction modal'
+  },
+  approveCorrection: {
+    id: 'modal.approveCorrection',
+    defaultMessage: 'Approve correction?',
+    description: 'The title for approve correction modal'
+  },
+  rejectCorrection: {
+    id: 'modal.rejectCorrection',
+    defaultMessage: 'Reject correction?',
+    description: 'The title for reject correction modal'
+  },
+  actionModalConfirm: {
+    id: 'actionModal.confirm',
+    defaultMessage: 'Confirm',
+    description: 'The label for confirm button of action modal'
+  },
+  correctionRequest: {
+    id: 'correction.correctionRequest',
+    defaultMessage: 'Correction request',
+    description: 'Correction request text'
+  },
+  rejectReason: {
+    id: 'correction.correctionReject.reason',
+    defaultMessage: 'Reason for rejection',
+    description: 'Correction request rejection reason'
+  }
+})
+
+const Row = styled.div<{
+  position?: 'left' | 'center'
+  background?: 'white' | 'background'
+}>`
+  display: flex;
+  gap: 16px;
+  width: 100%;
+  justify-content: ${({ position }) => position || 'center'};
+  background-color: ${({ theme, background }) =>
+    !background || background === 'background'
+      ? theme.colors.background
+      : theme.colors.white};
+  flex-direction: row;
+  padding: 24px 0px 24px 0px;
+  @media (max-width: ${({ theme }) => theme.grid.breakpoints.md}px) {
+    padding: 0;
+  }
+`
+
+const StyledTextArea = styled(TextArea)`
+  height: 120px;
+  width: 100%;
+`
+
+const StyledStack = styled(Stack)`
+  width: 100%;
+  padding-top: 20px;
+
+  > div {
+    width: 100%;
+  }
+`
+
+function ApproveModal({
+  close,
+  onSubmit,
+  title
+}: {
+  close: (result: boolean | null) => void
+  onSubmit: () => void
+  title: string
+}) {
+  const intl = useIntl()
+  return (
+    <Dialog
+      actions={[
+        <Button
+          key="cancel_correction_approval"
+          id="cancel_correction_approval"
+          size="large"
+          type="tertiary"
+          onClick={() => {
+            close(true)
+          }}
+        >
+          {intl.formatMessage(reviewCorrectionMessages.actionModalCancel)}
+        </Button>,
+        <Button
+          key="confirm_correction"
+          id="confirm_correction"
+          size="large"
+          type="primary"
+          onClick={() => {
+            onSubmit()
+            close(true)
+          }}
+        >
+          {intl.formatMessage(reviewCorrectionMessages.actionModalConfirm)}
+        </Button>
+      ]}
+      isOpen={true}
+      title={title}
+      variant="large"
+      width={700}
+      onClose={() => close(true)}
+    >
+      <Stack>
+        <Text color="grey500" element="p" variant="reg16">
+          {intl.formatMessage(reviewCorrectionMessages.actionModalDescription)}
+        </Text>
+      </Stack>
+    </Dialog>
+  )
+}
+
+function RejectModal({
+  close,
+  onSubmit,
+  title
+}: {
+  close: (result: boolean | null) => void
+  onSubmit: (message: string) => void
+  title: string
+}) {
+  const intl = useIntl()
+  const [message, setMessage] = React.useState('')
+  return (
+    <Dialog
+      actions={[
+        <Button
+          key="cancel_correction_rejection"
+          id="cancel_correction_rejection"
+          size="large"
+          type="tertiary"
+          onClick={() => {
+            close(true)
+          }}
+        >
+          {intl.formatMessage(reviewCorrectionMessages.actionModalCancel)}
+        </Button>,
+        <Button
+          key="reject_correction"
+          disabled={!message}
+          id="reject_correction"
+          size="large"
+          type="negative"
+          onClick={() => {
+            onSubmit(message)
+            close(true)
+          }}
+        >
+          {intl.formatMessage(reviewCorrectionMessages.actionModalConfirm)}
+        </Button>
+      ]}
+      isOpen={true}
+      title={title}
+      variant="large"
+      width={700}
+      onClose={() => close(true)}
+    >
+      <Stack>
+        <Text color="grey500" element="p" variant="reg16">
+          {intl.formatMessage(reviewCorrectionMessages.rejectModalDescription)}
+        </Text>
+      </Stack>
+      <StyledStack>
+        <InputField
+          id={'reject-correction'}
+          label={intl.formatMessage(reviewCorrectionMessages.rejectReason)}
+          required={true}
+          touched={false}
+        >
+          <StyledTextArea
+            id={'reject-correction-reason'}
+            onChange={(e) => setMessage(e.target.value)}
+          />
+        </InputField>
+      </StyledStack>
+    </Dialog>
+  )
+}
+
+// Content has 'height: 100%' on mobile, which breaks the page layout if there is anything on the page after the Content.
+// We don't want that.
+const StyledContent = styled(Content)`
+  height: auto;
+
+  @media (max-width: ${({ theme }) => theme.grid.breakpoints.md}px) {
+    margin-bottom: 28px;
+  }
+`
+
+export function ReviewCorrection({
+  form,
+  correctionRequestAction,
+  validatorContext
+}: {
+  form: EventState
+  correctionRequestAction: RequestedCorrectionAction
+  validatorContext: ValidatorContext
+}) {
+  const intl = useIntl()
+  const { getAnnotation } = useActionAnnotation()
+  const annotation = getAnnotation()
+  const { eventId } = useTypedParams(ROUTES.V2.EVENTS.REQUEST_CORRECTION.REVIEW)
+  const [searchParams] = useTypedSearchParams(
+    ROUTES.V2.EVENTS.REQUEST_CORRECTION.REVIEW
+  )
+
+  const events = useEvents()
+  const event = events.getEvent.getFromCache(eventId)
+  const { eventConfiguration } = useEventConfiguration(event.type)
+  const eventIndex = getCurrentEventState(event, eventConfiguration)
+  const { isActionAllowed } = useUserAllowedActions(eventIndex)
+  const [modal, openModal] = useModal()
+  const navigate = useNavigate()
+
+  const approveActionConfig = getActionConfig({
+    eventConfiguration,
+    actionType: ActionType.APPROVE_CORRECTION
+  })
+  const rejectActionConfig = getActionConfig({
+    eventConfiguration,
+    actionType: ActionType.REJECT_CORRECTION
+  })
+
+  const approveVisible = approveActionConfig
+    ? isActionVisible(approveActionConfig, eventIndex, validatorContext)
+    : true
+  const approveEnabled = approveActionConfig
+    ? isActionEnabled(approveActionConfig, eventIndex, validatorContext)
+    : true
+  const rejectVisible = rejectActionConfig
+    ? isActionVisible(rejectActionConfig, eventIndex, validatorContext)
+    : true
+  const rejectEnabled = rejectActionConfig
+    ? isActionEnabled(rejectActionConfig, eventIndex, validatorContext)
+    : true
+
+  // Configured labels/icons only affect the action menu; this core-owned
+  // review page keeps hardcoded button labels/icons and modal titles, while
+  // the configs' conditionals still gate visibility/enabling.
+  const approveModalTitle = intl.formatMessage(
+    reviewCorrectionMessages.approveCorrection
+  )
+  const rejectModalTitle = intl.formatMessage(
+    reviewCorrectionMessages.rejectCorrection
+  )
+
+  const openApproveModal = async () => {
+    await openModal((close) => (
+      <ApproveModal
+        close={close}
+        title={approveModalTitle}
+        onSubmit={() => {
+          events.actions.correction.approve.mutate({
+            transactionId: generateTransactionId(),
+            eventId,
+            requestId: correctionRequestAction.id,
+            annotation
+          })
+          if (searchParams.backTo) {
+            return navigate(searchParams.backTo)
+          } else {
+            return navigate(ROUTES.V2.EVENTS.EVENT.buildPath({ eventId }))
+          }
+        }}
+      />
+    ))
+  }
+
+  const openRejectModal = async () => {
+    await openModal((close) => (
+      <RejectModal
+        close={close}
+        title={rejectModalTitle}
+        onSubmit={(reason) => {
+          events.actions.correction.reject.mutate({
+            transactionId: generateTransactionId(),
+            eventId,
+            requestId: correctionRequestAction.id,
+            annotation,
+            content: { reason }
+          })
+          if (searchParams.backTo) {
+            return navigate(searchParams.backTo)
+          } else {
+            return navigate(
+              ROUTES.V2.EVENTS.EVENT.buildPath(
+                { eventId },
+                { backTo: searchParams.backTo }
+              )
+            )
+          }
+        }}
+      />
+    ))
+  }
+
+  const rejectButton = rejectVisible && (
+    <Button
+      disabled={!rejectEnabled}
+      fullWidth={true}
+      id="rejectCorrectionBtn"
+      size="large"
+      type="negative"
+      onClick={openRejectModal}
+    >
+      <Icon name="X" />
+      {intl.formatMessage(buttonMessages.reject)}
+    </Button>
+  )
+
+  const approveButton = approveVisible && (
+    <Button
+      disabled={!approveEnabled}
+      fullWidth={true}
+      id="ApproveCorrectionBtn"
+      size="large"
+      type="positive"
+      onClick={openApproveModal}
+    >
+      <Icon name="Check" />
+      {intl.formatMessage(buttonMessages.approve)}
+    </Button>
+  )
+
+  return (
+    <StyledContent
+      showTitleOnMobile={true}
+      size={ContentSize.LARGE}
+      title={intl.formatMessage(reviewCorrectionMessages.correctionRequest)}
+    >
+      <CorrectionDetails
+        annotation={annotation}
+        correctionRequestAction={correctionRequestAction}
+        event={event}
+        form={form}
+        requesting={!isActionAllowed(ActionType.APPROVE_CORRECTION)}
+        validatorContext={validatorContext}
+      />
+      <Row background="white" position="left">
+        {rejectButton}
+        {approveButton}
+      </Row>
+      {modal}
+    </StyledContent>
+  )
+}

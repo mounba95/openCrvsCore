@@ -1,0 +1,290 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import * as React from 'react'
+import { useIntl } from 'react-intl'
+import { userMessages as messages, buttonMessages } from '@client/i18n/messages'
+import { LinkButton } from '@opencrvs/components/lib/buttons'
+import { Button, ITheme, Dialog } from '@opencrvs/components'
+import Cropper from 'react-easy-crop'
+import type { Point, Area, Size } from 'react-easy-crop'
+import styled, { useTheme } from 'styled-components'
+import { getUserDetails } from '@client/profile/profileSelectors'
+import { useDispatch, useSelector } from 'react-redux'
+import { ImageLoader } from './ImageLoader'
+import { getCroppedImage, IImage } from '@client/utils/imageUtils'
+
+import { Square } from '@opencrvs/components/lib/icons'
+import { useOnlineStatus } from '@client/utils'
+import { useUsers } from '@client/v2-events/hooks/useUsers'
+import { useFileUpload } from '@client/v2-events/features/files/useFileUpload'
+import { cacheFile } from '@client/v2-events/cache'
+import { modifyUserDetails } from '@client/profile/profileActions'
+import { DocumentPath } from '@opencrvs/commons/client'
+
+const Container = styled.div`
+  align-self: center;
+  position: relative;
+  width: min(600px, 90%);
+  aspect-ratio: 1;
+`
+
+const Description = styled.div`
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+`
+
+const SliderContainer = styled.div`
+  width: min(600px, 90%);
+  display: flex;
+  align-self: center;
+  align-items: center;
+  margin: 30px 0;
+  padding: 0 16px;
+  gap: 8px;
+`
+
+const StyledInput = styled.input`
+  flex-grow: 1;
+`
+
+function Slider(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <SliderContainer>
+      <Square width={12} height={12} color="grey400" />
+      <StyledInput {...props} />
+      <Square width={18} height={18} color="grey400" />
+    </SliderContainer>
+  )
+}
+
+const DefaultImage = styled.div<{ width: number; height: number }>`
+  border-radius: 50%;
+  width: ${({ width }) => width}px;
+  height: ${({ height }) => height}px;
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background-color: ${({ theme }) => theme.colors.grey100};
+`
+
+const ErrorMessage = styled.div`
+  color: ${({ theme }) => theme.colors.negative};
+`
+
+interface IProps {
+  showChangeAvatar: boolean
+  cancelAvatarChangeModal: () => void
+  imgSrc: IImage
+  onImgSrcChanged: (img: IImage) => void
+  error: string
+  onErrorChanged: (error: string) => void
+  onConfirmAvatarChange: () => void
+  onAvatarChanged: (img: string) => void
+}
+
+const DEFAULT_SIZE: Size = {
+  height: 0,
+  width: 0
+}
+
+const DEFAULT_CROP: Point = {
+  x: 0,
+  y: 0
+}
+
+const DEFAULT_AREA: Area = {
+  ...DEFAULT_SIZE,
+  ...DEFAULT_CROP
+}
+
+function useCropSize(breakpoint: number) {
+  const [value, setValue] = React.useState<number>(360)
+
+  React.useEffect(() => {
+    function handleResize() {
+      if (window.innerWidth > breakpoint) {
+        setValue(360)
+      } else {
+        setValue(240)
+      }
+    }
+
+    handleResize()
+
+    window.addEventListener('resize', handleResize)
+
+    return () => window.removeEventListener('resize', handleResize)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return { width: value, height: value }
+}
+
+function AvatarChangeModalComp({
+  showChangeAvatar,
+  cancelAvatarChangeModal,
+  imgSrc,
+  onImgSrcChanged: setImgSrc,
+  error,
+  onErrorChanged: setError,
+  onConfirmAvatarChange,
+  onAvatarChanged
+}: IProps) {
+  const intl = useIntl()
+  const theme = useTheme() as ITheme
+  const isOnline = useOnlineStatus()
+  const userDetails = useSelector(getUserDetails)
+  const { changeAvatar: changeAvatarMutation } = useUsers()
+  const [crop, setCrop] = React.useState<Point>(DEFAULT_CROP)
+  const [zoom, setZoom] = React.useState<number>(1)
+  const [croppedArea, setCroppedArea] = React.useState<Area>(DEFAULT_AREA)
+
+  const dispatch = useDispatch()
+
+  const cropSize = useCropSize(theme.grid.breakpoints.md)
+
+  const reset = () => {
+    setCrop(DEFAULT_CROP)
+    setCroppedArea(DEFAULT_AREA)
+    setZoom(1)
+    setError('')
+  }
+
+  const handleCancel = () => {
+    cancelAvatarChangeModal()
+    reset()
+  }
+
+  const { uploadFileAsync } = useFileUpload(
+    `users/${userDetails?.id}`,
+    userDetails?.id || '',
+    {}
+  )
+  const handleApply = async () => {
+    const croppedImage = await getCroppedImage(imgSrc, croppedArea)
+
+    if (!userDetails) {
+      throw new Error(
+        'User details not in the scope of avatar change modal. This should never happen'
+      )
+    }
+
+    if (!croppedImage) {
+      setError(intl.formatMessage(messages.avatarProcessingError))
+      return
+    }
+    const { url } = await uploadFileAsync(croppedImage, userDetails.id)
+    if (userDetails && userDetails.id && croppedImage) {
+      changeAvatarMutation.mutate(
+        {
+          userId: userDetails.id,
+          avatar: url
+        },
+        {
+          onSuccess: (data) => {
+            cacheFile({ url, file: croppedImage })
+
+            dispatch(modifyUserDetails({ avatar: url as DocumentPath }))
+            onAvatarChanged(url)
+            reset()
+          }
+        }
+      )
+      onConfirmAvatarChange()
+    }
+  }
+
+  return (
+    <Dialog
+      id="ChangeAvatarModal"
+      variant="large"
+      width={1080}
+      isOpen={showChangeAvatar}
+      title={intl.formatMessage(messages.changeAvatar)}
+      actions={[
+        <Button
+          type="tertiary"
+          key="cancel"
+          id="modal_cancel"
+          onClick={handleCancel}
+          size="large"
+        >
+          {intl.formatMessage(buttonMessages.cancel)}
+        </Button>,
+        <Button
+          type="primary"
+          key="apply"
+          id="apply_change"
+          disabled={!isOnline || !!error}
+          onClick={handleApply}
+          size="large"
+        >
+          {intl.formatMessage(buttonMessages.apply)}
+        </Button>
+      ]}
+      onClose={handleCancel}
+    >
+      <Description>
+        {!error && intl.formatMessage(messages.resizeAvatar)}
+        {error && <ErrorMessage>{error}</ErrorMessage>}
+        <ImageLoader
+          onImageLoaded={(image) => {
+            reset()
+            setImgSrc(image)
+          }}
+          onError={(error) => setError(error)}
+        >
+          <LinkButton size="small">
+            {intl.formatMessage(messages.changeImage)}
+          </LinkButton>
+        </ImageLoader>
+      </Description>
+      {error ? (
+        <DefaultImage {...cropSize}></DefaultImage>
+      ) : (
+        <>
+          <Container>
+            <Cropper
+              image={imgSrc.data}
+              crop={crop}
+              aspect={1}
+              cropShape="round"
+              showGrid={false}
+              cropSize={cropSize}
+              objectFit="vertical-cover"
+              zoom={zoom}
+              onZoomChange={(newZoom) => setZoom(newZoom)}
+              onCropChange={(newCrop) => setCrop(newCrop)}
+              onCropComplete={async (_, croppedArea) =>
+                setCroppedArea(croppedArea)
+              }
+            />
+          </Container>
+          <Slider
+            type="range"
+            value={zoom}
+            min={1}
+            step={0.02}
+            max={3}
+            onChange={({ target: { value } }) => setZoom(+value)}
+          />
+        </>
+      )}
+    </Dialog>
+  )
+}
+
+export const AvatarChangeModal = AvatarChangeModalComp

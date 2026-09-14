@@ -1,0 +1,300 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import * as actions from '@login/login/actions'
+import { initialState } from '@login/login/reducer'
+import { createStore, AppStore } from '@login/store'
+import { vi } from 'vitest'
+import { resolve } from 'url'
+import { authApi, client } from '@login/utils/authApi'
+
+import {
+  getSubmissionError,
+  getResentAuthenticationCode,
+  getsubmitting
+} from '@login/login/selectors'
+import { mockState } from '@login/tests/util'
+
+describe('actions', () => {
+  describe('authenticate', () => {
+    it('cleans mobile number by country and dispatch START_STEP_ONE action', () => {
+      const toStepTwo = vi.fn()
+      const toStepThree = vi.fn()
+      const action = {
+        type: actions.AUTHENTICATE,
+        payload: {
+          username: '+8801711111111',
+          password: 'test',
+          toStepTwo,
+          toStepThree
+        }
+      }
+      expect(
+        actions.authenticate(
+          { username: '+8801711111111', password: 'test' },
+          toStepTwo,
+          toStepThree
+        )
+      ).toEqual(action)
+    })
+  })
+})
+
+describe('reducer', () => {
+  let store: AppStore
+  beforeEach(() => {
+    const storebundle = createStore()
+    store = storebundle.store
+  })
+
+  it('updates the state with data ready to send to authorise service', async () => {
+    const expectedState = {
+      ...initialState,
+      submitting: true,
+      submissionError: false,
+      resentAuthenticationCode: false,
+      stepOneDetails: {
+        username: '+447111111111',
+        password: 'test'
+      }
+    }
+
+    const action = {
+      type: actions.AUTHENTICATE,
+      payload: {
+        username: '+447111111111',
+        password: 'test'
+      }
+    }
+    store.dispatch(action)
+    expect(store.getState().login).toEqual(expectedState)
+  })
+  it('updates the state when nonce is returned from the authorise service', () => {
+    const expectedState = {
+      ...initialState,
+      submitting: false,
+      submissionError: false,
+      resentAuthenticationCode: false,
+      refreshToken: undefined,
+      authenticationDetails: {
+        nonce: '1234'
+      }
+    }
+    const action = {
+      type: actions.AUTHENTICATION_COMPLETED,
+      payload: {
+        nonce: '1234',
+        toStepTwo: () => {},
+        toStepThree: () => {}
+      }
+    }
+    store.dispatch(action)
+    expect(store.getState().login).toEqual(expectedState)
+  })
+
+  it('updates the state when resend SMS is requested', () => {
+    const expectedState = {
+      ...initialState,
+      submitting: false,
+      submissionError: false,
+      resentAuthenticationCode: false
+    }
+    const action = {
+      type: actions.RESEND_AUTHENTICATION_CODE
+    }
+    store.dispatch(action)
+    expect(store.getState().login).toEqual(expectedState)
+  })
+  it('updates the state when nonce is returned from the resendAuthenticationCode service', () => {
+    const expectedState = {
+      ...initialState,
+      submitting: false,
+      submissionError: false,
+      resentAuthenticationCode: true,
+      authenticationDetails: {
+        nonce: '1234',
+        mobile: '',
+        email: ''
+      }
+    }
+    const action = {
+      type: actions.RESEND_AUTHENTICATION_CODE_COMPLETED,
+      payload: {
+        nonce: '1234'
+      }
+    }
+    store.dispatch(action)
+    expect(store.getState().login).toEqual(expectedState)
+  })
+  it('updates the state when resendAuthenticationCode service failed', () => {
+    const expectedState = {
+      ...initialState,
+      resentAuthenticationCode: false,
+      submissionError: true
+    }
+    const action = {
+      type: actions.RESEND_AUTHENTICATION_CODE_FAILED,
+      payload: 503
+    }
+    store.dispatch(action)
+    expect(store.getState().login).toEqual(expectedState)
+  })
+
+  it('updates the state with data ready to send to verify sms code service', async () => {
+    const expectedState = {
+      ...initialState,
+      submitting: true,
+      submissionError: false,
+      resentAuthenticationCode: false
+    }
+
+    const action = {
+      type: actions.VERIFY_CODE,
+      payload: {
+        code: '123456'
+      }
+    }
+    store.dispatch(action)
+    expect(store.getState().login).toEqual(expectedState)
+  })
+  it('validate mobile no and password field when not filled', async () => {
+    const action = {
+      type: actions.AUTHENTICATE_VALIDATE,
+      payload: 500
+    }
+    expect(
+      actions.authenticate(
+        { username: '', password: 'test' },
+        () => {},
+        () => {}
+      )
+    ).toEqual(action)
+  })
+  it('AUTHENTICATE_VALIDATE return errorCode', async () => {
+    const expectedState = {
+      ...initialState,
+      submissionError: true,
+      errorCode: 503
+    }
+
+    const action = {
+      type: actions.AUTHENTICATE_VALIDATE,
+      payload: 503
+    }
+    store.dispatch(action)
+    expect(store.getState().login).toEqual(expectedState)
+  })
+  it('succesfully logged in user with correct payload', async () => {
+    const expectedState = {
+      ...initialState,
+      stepSubmitting: false,
+      token:
+        'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJPbmxpbmUgSldUIEJ1aWxkZXIiLCJpYXQiOjE1NTY3ODM5NDMsImV4cCI6MTU4ODMxOTk0MywiYXVkIjoid3d3LmV4YW1wbGUuY29tIiwic3ViIjoianJvY2tldEBleGFtcGxlLmNvbSIsInNjb3BlIjpbIk1hbmFnZXIiLCJQcm9qZWN0IEFkbWluaXN0cmF0b3IiXX0.ggXSgfcD_OJqEd8_pmzw_AoqiqIq5sWXKtReCx6YdbQ',
+      refreshToken: undefined
+    }
+
+    const action = {
+      type: actions.VERIFY_CODE_COMPLETED,
+      payload: {
+        token:
+          'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJPbmxpbmUgSldUIEJ1aWxkZXIiLCJpYXQiOjE1NTY3ODM5NDMsImV4cCI6MTU4ODMxOTk0MywiYXVkIjoid3d3LmV4YW1wbGUuY29tIiwic3ViIjoianJvY2tldEBleGFtcGxlLmNvbSIsInNjb3BlIjpbIk1hbmFnZXIiLCJQcm9qZWN0IEFkbWluaXN0cmF0b3IiXX0.ggXSgfcD_OJqEd8_pmzw_AoqiqIq5sWXKtReCx6YdbQ'
+      }
+    }
+    store.dispatch(action)
+    expect(store.getState().login).toEqual(expectedState)
+  })
+
+  it('redirects without double slash when redirectToURL starts with a slash', async () => {
+    const assign = vi.fn()
+    vi.stubGlobal('location', { assign })
+    // Niger : la redirection passe désormais par un appel à getMyContext
+    // (vérification multi-commune) avant de rediriger — on le simule en
+    // échec ici pour tester le comportement "fail open" (redirection
+    // immédiate, un seul bureau).
+    const getMyContextSpy = vi
+      .spyOn(authApi, 'getMyContext')
+      .mockRejectedValue(new Error('network error'))
+
+    store.dispatch({
+      type: actions.CLIENT_REDIRECT_ROUTE,
+      payload: { url: '/events/abc-123' }
+    })
+    store.dispatch({
+      type: actions.VERIFY_CODE_COMPLETED,
+      payload: { token: 'test-token', refreshToken: 'test-refresh-token' }
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    getMyContextSpy.mockRestore()
+
+    expect(assign).toHaveBeenCalledWith(
+      expect.stringMatching(/\/register\/events\/abc-123/)
+    )
+    expect(assign).not.toHaveBeenCalledWith(
+      expect.stringContaining('/register//events/')
+    )
+  })
+
+  describe('GOTO_APP', () => {
+    it('redirects to /register/?refreshToken=<token> when state.refreshToken is set', async () => {
+      const assign = vi.fn()
+      vi.stubGlobal('location', { assign })
+
+      // Seed refreshToken into state via AUTHENTICATION_COMPLETED with no token
+      // (no-token branch calls toStepTwo, not window.location.assign)
+      store.dispatch({
+        type: actions.AUTHENTICATION_COMPLETED,
+        payload: {
+          nonce: 'abc',
+          refreshToken: 'my-refresh-token',
+          toStepTwo: () => {},
+          toStepThree: () => {}
+        }
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      assign.mockClear()
+
+      store.dispatch({ type: actions.GOTO_APP, payload: '' })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(assign).toHaveBeenCalledWith(
+        '/register/?refreshToken=my-refresh-token'
+      )
+    })
+
+    it('redirects to /login when state.refreshToken is falsy', async () => {
+      const assign = vi.fn()
+      vi.stubGlobal('location', { assign })
+
+      // Fresh store has refreshToken = '' (falsy)
+      store.dispatch({ type: actions.GOTO_APP, payload: '' })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(assign).toHaveBeenCalledWith('/login')
+    })
+  })
+})
+
+describe('selectors', () => {
+  it('returns submission error boolean', () => {
+    const submissionError = false
+    expect(getSubmissionError(mockState)).toEqual(submissionError)
+  })
+  it('returns getResentAuthenticationCode boolean', () => {
+    const resentAuthenticationCode = false
+    expect(getResentAuthenticationCode(mockState)).toEqual(
+      resentAuthenticationCode
+    )
+  })
+  it('returns submitting boolean', () => {
+    const submitting = false
+    expect(getsubmitting(mockState)).toEqual(submitting)
+  })
+})

@@ -1,0 +1,857 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import { AvatarSmall } from '@client/components/Avatar'
+import { LoadingIndicator } from '@client/components/LoadingIndicator'
+import { SearchableSelect } from '@client/v2-events/components/forms/inputs/SearchableSelect'
+import { usePermissions } from '@client/hooks/useAuthorization'
+import {
+  buttonMessages,
+  constantsMessages,
+  errorMessages
+} from '@client/i18n/messages'
+import { messages as headerMessages } from '@client/i18n/messages/views/header'
+import { messages } from '@client/i18n/messages/views/sysAdmin'
+import * as routes from '@client/navigation/routes'
+import { getUserDetails } from '@client/profile/profileSelectors'
+import { IStoreState } from '@client/store'
+import { UserDetails } from '@client/utils/userUtils'
+import { useLocations } from '@client/v2-events/hooks/useLocations'
+import { formatUserRole } from '@client/v2-events/hooks/useRoles'
+import { useUsers } from '@client/v2-events/hooks/useUsers'
+import { ROUTES } from '@client/v2-events/routes'
+import { getUsersFullName } from '@client/v2-events/utils'
+import { getAddressNameV2, UserStatus } from '@client/views/SysAdmin/Team/utils'
+import { useEventFormData } from '@client/v2-events/features/events/useEventFormData'
+import { useUserFormState } from '@client/views/SysAdmin/Team/user/userEditor/useUserFormState'
+import {
+  PasswordFields,
+  isPasswordValid
+} from '@client/views/SysAdmin/Team/user/userEditor/PasswordFields'
+import { Location, User, UUID } from '@opencrvs/commons/client'
+import { Link } from '@opencrvs/components'
+import { Button } from '@opencrvs/components/lib/Button'
+import { LinkButton } from '@opencrvs/components/lib/buttons'
+import {
+  BodyContent,
+  Content,
+  ContentSize
+} from '@opencrvs/components/lib/Content'
+import { Icon } from '@opencrvs/components/lib/Icon'
+import { NoWifi } from '@opencrvs/components/lib/icons'
+import { ListUser } from '@opencrvs/components/lib/ListUser'
+import { Pagination } from '@opencrvs/components/lib/Pagination'
+import { Pill } from '@opencrvs/components/lib/Pill'
+import { Dialog } from '@opencrvs/components/lib/Dialog'
+import { Stack } from '@opencrvs/components/lib/Stack'
+import { ITheme } from '@opencrvs/components/lib/theme'
+import { Toast } from '@opencrvs/components/lib/Toast'
+import { ToggleMenu } from '@opencrvs/components/lib/ToggleMenu'
+import { parse } from 'qs'
+import { stringify } from 'querystring'
+import React, { useCallback, useState } from 'react'
+import { useIntl } from 'react-intl'
+import { connect } from 'react-redux'
+import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import styled, { withTheme } from 'styled-components'
+import { useOnlineStatus } from '../../../../utils'
+import { useAdministrativeAreas } from '../../../../v2-events/hooks/useAdministrativeAreas'
+import { UserActivationModal } from './UserActivationModal'
+
+const DEFAULT_FIELD_AGENT_LIST_SIZE = 10
+const DEFAULT_PAGE_NUMBER = 1
+
+/**
+ * Niger : `user.search` renvoie en réalité un UserSummary (pas un User
+ * complet) — `username` n'existe que sur ce résumé (voir UserSummary dans
+ * @opencrvs/commons). Le composant traite déjà ces résultats comme des
+ * `User` par commodité (cast via prédicat de type plus bas) ; on ajoute donc
+ * simplement le champ optionnel ici plutôt que de retyper tout le fichier.
+ */
+type UserWithUsername = User & { username?: string }
+
+const UserTable = styled(BodyContent)`
+  padding: 0px;
+  margin: 8px auto 0;
+  @media (max-width: ${({ theme }) => theme.grid.breakpoints.md}px) {
+    padding: 0px;
+  }
+`
+
+// Niger : même traitement de carte que les formulaires (fond vert pâle +
+// liseré vert + ombre légère) — harmonise la page liste des utilisateurs
+// avec le reste de l'appli, voir FormWizard.tsx (AccentContent) pour le même
+// motif. Fond ajouté le 2026-08-18 pour suivre la mise à jour du motif
+// (auparavant carte blanche + liseré seul, voir FormWizard.tsx). Détachée du
+// menu de gauche (margin-left) — WorkqueueLayout utilise <Frame> nu (pas
+// Frame.LayoutForm), donc pas de règle `${Content} { margin: 0 }` à
+// contourner ici.
+const AccentContent = styled(Content)`
+  margin-left: 20px;
+  background: #c5e0b5;
+  border-top: 4px solid ${({ theme }) => theme.colors.brandGreen};
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+`
+
+const LocationSelectWrapper = styled.div`
+  width: 240px;
+  @media (max-width: ${({ theme }) => theme.grid.breakpoints.md}px) {
+    width: 100%;
+  }
+`
+
+const ErrorText = styled.div`
+  ${({ theme }) => theme.fonts.bold16};
+  text-align: center;
+  height: 328px;
+  margin-top: 16px;
+  display: flex;
+  gap: 12px;
+  @media (max-width: ${({ theme }) => theme.grid.breakpoints.md}px) {
+    margin-top: 12px;
+    height: calc(100vh - 104px);
+  }
+`
+
+const Loading = styled.div`
+  @media (max-width: ${({ theme }) => theme.grid.breakpoints.md}px) {
+    height: calc(100vh - 104px);
+  }
+`
+
+const Header = styled.h1`
+  color: ${({ theme }) => theme.colors.copy};
+  ${({ theme }) => theme.fonts.h2};
+  margin: 8px 0;
+  @media (min-width: ${({ theme }) => theme.grid.breakpoints.lg}px) {
+    display: none;
+  }
+`
+
+const MobileActionBar = styled.div`
+  display: none;
+  @media (max-width: ${({ theme }) => theme.grid.breakpoints.lg}px) {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 0;
+
+    & > div:first-child {
+      flex: 1;
+      min-width: 0;
+    }
+
+    & > div:first-child > button {
+      width: 100%;
+    }
+
+    & > div:first-child > button span {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+  }
+`
+
+const LocationInfo = styled.div`
+  padding: 8px 0px;
+`
+
+const LocationInfoValue = styled.div`
+  color: ${({ theme }) => theme.colors.supportingCopy};
+  ${({ theme }) => theme.fonts.reg18};
+`
+
+const Value = styled.span`
+  color: ${({ theme }) => theme.colors.grey500};
+  ${({ theme }) => theme.fonts.reg16}
+`
+
+// Niger : identifiant affiché sous le nom — plus de rappel par e-mail/SMS,
+// l'admin doit pouvoir le consulter directement dans la liste.
+const Username = styled.div`
+  color: ${({ theme }) => theme.colors.grey500};
+  ${({ theme }) => theme.fonts.reg14}
+`
+
+const NoRecord = styled.div<{ isFullPage?: boolean }>`
+  ${({ theme }) => theme.fonts.h3};
+  text-align: left;
+  margin-left: ${({ isFullPage }) => (isFullPage ? `40px` : `10px`)};
+  color: ${({ theme }) => theme.colors.copy};
+  margin-top: 20px;
+`
+
+const ConnectivityContainer = styled.div`
+  height: 328px;
+  margin-top: 16px;
+  display: flex;
+  gap: 12px;
+  @media (max-width: ${({ theme }) => theme.grid.breakpoints.md}px) {
+    margin-top: 12px;
+    height: calc(100vh - 104px);
+  }
+`
+const NoConnectivity = styled(NoWifi)`
+  width: 24px;
+`
+const Text = styled.div`
+  ${({ theme }) => theme.fonts.reg16};
+  text-align: center;
+`
+const LinkButtonModified = styled(LinkButton)`
+  height: 24px;
+`
+
+interface SearchParams {
+  locationId?: UUID
+}
+
+type UserListProps = {
+  theme: ITheme
+  userDetails: UserDetails | null
+}
+
+interface ToggleModal {
+  modalVisible: boolean
+  selectedUser: User | null
+}
+
+export const Status = (statusProps: { status: string }) => {
+  const status = statusProps.status
+  const intl = useIntl()
+  switch (status) {
+    case UserStatus[UserStatus.ACTIVE].toLowerCase():
+      return <Pill type="active" label={intl.formatMessage(messages.active)} />
+    case UserStatus[UserStatus.DEACTIVATED].toLowerCase():
+      return (
+        <Pill
+          type="inactive"
+          label={intl.formatMessage(messages.deactivated)}
+        />
+      )
+    case UserStatus[UserStatus.DISABLED].toLowerCase():
+      return (
+        <Pill type="default" label={intl.formatMessage(messages.disabled)} />
+      )
+    case UserStatus[UserStatus.PENDING].toLowerCase():
+    default:
+      return (
+        <Pill type="pending" label={intl.formatMessage(messages.pending)} />
+      )
+  }
+}
+
+function UserListComponent({ userDetails }: UserListProps) {
+  const location = useLocation()
+  const navigate = useNavigate()
+
+  const intl = useIntl()
+  const isOnline = useOnlineStatus()
+
+  const { getLocations } = useLocations()
+  const { getAdministrativeAreas } = useAdministrativeAreas()
+  const administrativeAreas = getAdministrativeAreas.useSuspenseQuery()
+  const locations = getLocations.useSuspenseQuery()
+
+  const [showResetPasswordSuccess, setShowResetPasswordSuccess] =
+    useState(false)
+  const [showResetPasswordError, setResetPasswordError] = useState(false)
+  const [resetPasswordValue, setResetPasswordValue] = useState({
+    password: '',
+    confirmPassword: ''
+  })
+  const [resetPasswordTouched, setResetPasswordTouched] = useState(false)
+
+  const [showActivationToggleSuccess, setShowActivationToggleSuccess] =
+    useState(false)
+
+  const [showActivationToggleError, setShowActivationToggleError] =
+    useState(false)
+  const {
+    canReadUser,
+    canEditUser,
+    canAddOfficeUsers,
+    canAccessOffice,
+    canAccessMultipleLocations
+  } = usePermissions()
+  const { locationId } = parse(location.search, {
+    ignoreQueryPrefix: true
+  }) as unknown as SearchParams
+  const [toggleActivation, setToggleActivation] = useState<ToggleModal>({
+    modalVisible: false,
+    selectedUser: null
+  })
+  const [toggleResetPassword, setToggleResetPassword] = useState<ToggleModal>({
+    modalVisible: false,
+    selectedUser: null
+  })
+
+  const [currentPageNumber, setCurrentPageNumber] =
+    useState<number>(DEFAULT_PAGE_NUMBER)
+
+  const parsedId = UUID.safeParse(locationId)
+
+  const searchedLocation: Location | undefined = parsedId.success
+    ? locations.get(parsedId.data)
+    : undefined
+
+  const hasAccessToMultipleLocations = canAccessMultipleLocations()
+
+  const { searchUsers, sendResetPasswordInvite } = useUsers()
+  const {
+    data: searchResults,
+    isLoading,
+    error
+  } = searchUsers.useQuery(
+    {
+      primaryOfficeId: locationId,
+      count: DEFAULT_FIELD_AGENT_LIST_SIZE,
+      skip: (currentPageNumber - 1) * DEFAULT_FIELD_AGENT_LIST_SIZE,
+      sortBy: 'firstname',
+      sortOrder: 'asc'
+    },
+    { enabled: !!locationId }
+  )
+
+  const toggleUserActivationModal = useCallback(
+    function toggleUserActivationModal(user?: User) {
+      if (user !== undefined) {
+        setToggleActivation({
+          ...toggleActivation,
+          modalVisible: true,
+          selectedUser: user
+        })
+      } else {
+        setToggleActivation({
+          ...toggleActivation,
+          modalVisible: false
+        })
+      }
+    },
+    [toggleActivation]
+  )
+
+  const toggleUserResetPasswordModal = useCallback(
+    function toggleUserResetPasswordModal(user?: User) {
+      if (user !== undefined) {
+        setResetPasswordValue({ password: '', confirmPassword: '' })
+        setResetPasswordTouched(false)
+        setToggleResetPassword({
+          ...toggleResetPassword,
+          modalVisible: true,
+          selectedUser: user
+        })
+      } else {
+        setToggleResetPassword({
+          ...toggleResetPassword,
+          modalVisible: false
+        })
+      }
+    },
+    [toggleResetPassword]
+  )
+
+  const resetPassword = useCallback(
+    async (userId: string, password: string) => {
+      try {
+        await sendResetPasswordInvite.mutateAsync({
+          userId: userId as UUID,
+          password
+        })
+        setShowResetPasswordSuccess(true)
+      } catch {
+        setResetPasswordError(true)
+      }
+    },
+    [sendResetPasswordInvite]
+  )
+
+  const getMenuItems = useCallback(
+    function getMenuItems(user: User) {
+      const menuItems = [
+        {
+          label: intl.formatMessage(messages.editUserDetailsTitle),
+          handler: () => {
+            useUserFormState.getState().clear()
+            useEventFormData.getState().clear()
+            navigate(
+              ROUTES.V2.SETTINGS.USER.REVIEW.buildPath(
+                {
+                  userId: user.id
+                },
+                { from: 'user.list' }
+              )
+            )
+          }
+        }
+      ]
+
+      if (user.status === 'pending' || user.status === 'active') {
+        menuItems.push({
+          label: intl.formatMessage(messages.resetUserPasswordTitle),
+          handler: () => {
+            toggleUserResetPasswordModal(user)
+          }
+        })
+      }
+
+      if (user.status === 'active') {
+        menuItems.push({
+          label: intl.formatMessage(messages.deactivate),
+          handler: () => toggleUserActivationModal(user)
+        })
+      }
+
+      if (user.status === 'deactivated') {
+        menuItems.push({
+          label: intl.formatMessage(messages.reactivate),
+          handler: () => toggleUserActivationModal(user)
+        })
+      }
+
+      return menuItems
+    },
+    [intl, toggleUserActivationModal, toggleUserResetPasswordModal, navigate]
+  )
+
+  const getUserName = (user: User) => {
+    return getUsersFullName(user.name)
+  }
+
+  const StatusMenu = useCallback(
+    function StatusMenu({
+      user,
+      index,
+      status
+    }: {
+      userDetails: UserDetails | null
+      locationId: string
+      user: User
+      index: number
+      status?: string
+    }) {
+      return (
+        <Stack
+          alignItems="center"
+          direction="row"
+          gap={8}
+          justifyContent="flex-start"
+        >
+          <Status status={status || 'pending'} />
+          {canEditUser(user) && (
+            <ToggleMenu
+              id={`user-item-${index}-menu`}
+              toggleButton={
+                <Icon name="DotsThreeVertical" color="primary" size="large" />
+              }
+              menuItems={getMenuItems(user)}
+            />
+          )}
+        </Stack>
+      )
+    },
+    [canEditUser, getMenuItems]
+  )
+
+  const generateUserContents = useCallback(
+    function generateUserContents(
+      users: UserWithUsername[],
+      locationId: string,
+      userDetails: UserDetails | null
+    ) {
+      return users.map((user, index) => {
+        const name = getUsersFullName(user.name)
+        const role = formatUserRole(user.role, intl)
+        const avatar = user.avatar
+
+        const userForPermissions = {
+          id: user.id,
+          primaryOfficeId: user.primaryOfficeId
+        }
+
+        return {
+          image: (
+            <Link
+              onClick={() =>
+                navigate(
+                  ROUTES.V2.SETTINGS.USER.VIEW.buildPath({
+                    userId: user.id
+                  })
+                )
+              }
+              disabled={!canReadUser(userForPermissions)}
+            >
+              <AvatarSmall name={name} avatar={avatar || undefined} />
+            </Link>
+          ),
+          label: (
+            <>
+              <Link
+                id="profile-link"
+                onClick={() =>
+                  navigate(
+                    ROUTES.V2.SETTINGS.USER.VIEW.buildPath({
+                      userId: user.id
+                    })
+                  )
+                }
+                disabled={!canReadUser(userForPermissions)}
+              >
+                {name}
+              </Link>
+              {user.username && <Username>{user.username}</Username>}
+            </>
+          ),
+          value: <Value>{role}</Value>,
+          actions: (
+            <StatusMenu
+              userDetails={userDetails}
+              locationId={locationId}
+              user={user}
+              index={index}
+              status={user.status || undefined}
+            />
+          )
+        }
+      })
+    },
+    [StatusMenu, intl, navigate, canReadUser]
+  )
+
+  const onClickAddUser = useCallback(
+    function onClickAddUser() {
+      if (searchedLocation) {
+        navigate(
+          ROUTES.V2.SETTINGS.USER.CREATE.buildPath(
+            {},
+            {
+              officeId: searchedLocation.id
+            }
+          )
+        )
+      }
+    },
+    [searchedLocation, navigate]
+  )
+
+  const LocationButton = (locationId: UUID) => {
+    const buttons: React.ReactElement[] = []
+    if (hasAccessToMultipleLocations) {
+      // Niger : même sélecteur (recherche + liste) que celui utilisé à la
+      // création d'utilisateur (OfficesPicker), au lieu du bouton+modale
+      // par défaut (LocationPicker, marqué @deprecated côté noyau).
+      const locationOptions = Array.from(locations.values())
+        .filter((location) => canAccessOffice(location))
+        .map((location) => ({ value: location.id, label: location.name }))
+      const selectedLocationOption = searchedLocation
+        ? { value: searchedLocation.id, label: searchedLocation.name }
+        : null
+      buttons.push(
+        <LocationSelectWrapper key={`location-picker-${locationId}`}>
+          <SearchableSelect
+            id="team-location-select"
+            options={locationOptions}
+            value={selectedLocationOption}
+            onChange={(option) => {
+              if (!option) {
+                return
+              }
+              navigate({
+                pathname: routes.TEAM_USER_LIST,
+                search: stringify({
+                  locationId: option.value
+                })
+              })
+
+              setCurrentPageNumber(DEFAULT_PAGE_NUMBER)
+            }}
+          />
+        </LocationSelectWrapper>
+      )
+    }
+    if (canAddOfficeUsers({ id: locationId })) {
+      buttons.push(
+        <Button
+          id="add-user"
+          type="icon"
+          size="medium"
+          key={`add-user-${locationId}`}
+          onClick={onClickAddUser}
+        >
+          <Icon name="UserPlus" />
+        </Button>
+      )
+    }
+    return buttons
+  }
+
+  const RenderUserList = useCallback(
+    function RenderUserList({
+      users,
+      locationId,
+      userDetails
+    }: {
+      users: UserWithUsername[]
+      locationId: UUID
+      userDetails: UserDetails | null
+    }) {
+      const totalData = users.length
+      const userContent = generateUserContents(users, locationId, userDetails)
+
+      return (
+        <UserTable id="user_list">
+          {userContent.length <= 0 ? (
+            <NoRecord id="no-record">
+              {intl.formatMessage(constantsMessages.noResults)}
+            </NoRecord>
+          ) : (
+            <ListUser
+              rows={userContent.map((content) => ({
+                avatar: content.image,
+                label: content.label,
+                value: content.value,
+                actions: content.actions ? [content.actions] : []
+              }))}
+              labelHeader={intl.formatMessage(constantsMessages.user)}
+              valueHeader={intl.formatMessage(constantsMessages.labelRole)}
+            />
+          )}
+          {totalData > DEFAULT_FIELD_AGENT_LIST_SIZE && (
+            <Pagination
+              currentPage={currentPageNumber}
+              totalPages={Math.ceil(totalData / DEFAULT_FIELD_AGENT_LIST_SIZE)}
+              onPageChange={(currentPage: number) =>
+                setCurrentPageNumber(currentPage)
+              }
+            />
+          )}
+          {toggleActivation.modalVisible && toggleActivation.selectedUser && (
+            <UserActivationModal
+              user={toggleActivation.selectedUser}
+              onClose={() => toggleUserActivationModal(undefined)}
+              onSuccess={() => {
+                toggleUserActivationModal(undefined)
+                setShowActivationToggleSuccess(true)
+              }}
+              onError={() => {
+                toggleUserActivationModal(undefined)
+                setShowActivationToggleError(true)
+              }}
+            />
+          )}
+          <Dialog
+            id="user-reset-password-modal"
+            isOpen={toggleResetPassword.modalVisible}
+            onClose={() => toggleUserResetPasswordModal()}
+            title={intl.formatMessage(messages.resetUserPasswordModalTitle)}
+            actions={[
+              <Button
+                type="tertiary"
+                id="reset-password-cancel"
+                key="reset-password-cancel"
+                onClick={() => toggleUserResetPasswordModal()}
+              >
+                {intl.formatMessage(buttonMessages.cancel)}
+              </Button>,
+              <Button
+                type="primary"
+                id="reset-password-send"
+                key="reset-password-send"
+                onClick={() => {
+                  setResetPasswordTouched(true)
+                  if (
+                    !isPasswordValid(
+                      resetPasswordValue.password,
+                      resetPasswordValue.confirmPassword
+                    )
+                  ) {
+                    return
+                  }
+                  if (toggleResetPassword.selectedUser?.id) {
+                    resetPassword(
+                      toggleResetPassword.selectedUser.id,
+                      resetPasswordValue.password
+                    )
+                  }
+                  toggleUserResetPasswordModal()
+                }}
+              >
+                {intl.formatMessage(buttonMessages.confirm)}
+              </Button>
+            ]}
+          >
+            <PasswordFields
+              confirmPassword={resetPasswordValue.confirmPassword}
+              password={resetPasswordValue.password}
+              touched={resetPasswordTouched}
+              onChange={setResetPasswordValue}
+            />
+          </Dialog>
+        </UserTable>
+      )
+    },
+    [
+      currentPageNumber,
+      generateUserContents,
+      intl,
+      toggleActivation.modalVisible,
+      toggleActivation.selectedUser,
+      toggleUserActivationModal,
+      resetPassword,
+      resetPasswordValue,
+      resetPasswordTouched,
+      toggleResetPassword.modalVisible,
+      toggleResetPassword.selectedUser,
+      toggleUserResetPasswordModal
+    ]
+  )
+
+  /**
+   * Because the locationId is a search parameter,
+   * it can happen that it gets removed as part of the login redirect mechanism causing the user to land on /team/users without a search parameter
+   */
+  if (!locationId) {
+    return <Navigate to={routes.HOME} />
+  }
+
+  // Block access to a location outside the user's jurisdiction
+  if (!parsedId.success || !canAccessOffice({ id: parsedId.data })) {
+    return <Navigate to={routes.HOME} replace />
+  }
+
+  return (
+    <>
+      {isOnline ? (
+        <AccentContent
+          title={
+            !isLoading && !error
+              ? searchedLocation?.name || ''
+              : intl.formatMessage(headerMessages.teamTitle)
+          }
+          size={ContentSize.NORMAL}
+          topActionButtons={LocationButton(locationId)}
+        >
+          {error ? (
+            <ErrorText id="user_loading_error">
+              <>{intl.formatMessage(errorMessages.userQueryError)}</>
+              <LinkButtonModified onClick={() => window.location.reload()}>
+                {intl.formatMessage(constantsMessages.refresh)}
+              </LinkButtonModified>
+            </ErrorText>
+          ) : isLoading ? (
+            <Loading>
+              <LoadingIndicator loading={true} />
+            </Loading>
+          ) : searchResults ? (
+            <>
+              <Header id="header">{searchedLocation?.name || ''}</Header>
+              <MobileActionBar>{LocationButton(locationId)}</MobileActionBar>
+              <LocationInfo>
+                {searchedLocation && (
+                  <LocationInfoValue>
+                    {getAddressNameV2(
+                      administrativeAreas,
+                      searchedLocation.administrativeAreaId
+                        ? administrativeAreas.get(
+                            searchedLocation.administrativeAreaId
+                          )
+                        : undefined
+                    )}
+                  </LocationInfoValue>
+                )}
+              </LocationInfo>
+              <RenderUserList
+                users={searchResults.filter(
+                  (u): u is UserWithUsername => u.type === 'user'
+                )}
+                locationId={locationId}
+                userDetails={userDetails}
+              />
+            </>
+          ) : null}
+        </AccentContent>
+      ) : (
+        <AccentContent
+          title={intl.formatMessage(headerMessages.teamTitle)}
+          size={ContentSize.NORMAL}
+        >
+          <ConnectivityContainer>
+            <NoConnectivity />
+            <Text id="no-connection-text">
+              {intl.formatMessage(constantsMessages.noConnection)}
+            </Text>
+          </ConnectivityContainer>
+        </AccentContent>
+      )}
+
+      {showResetPasswordSuccess && (
+        <Toast
+          id="reset_password_success"
+          type="success"
+          onClose={() => {
+            setShowResetPasswordSuccess(false)
+            setToggleResetPassword({
+              ...toggleResetPassword,
+              selectedUser: null
+            })
+          }}
+        >
+          {intl.formatMessage(messages.resetPasswordSuccess, {
+            username: getUserName(toggleResetPassword.selectedUser as User)
+          })}
+        </Toast>
+      )}
+      {showResetPasswordError && (
+        <Toast
+          id="reset_password_error"
+          type="warning"
+          onClose={() => setResetPasswordError(false)}
+        >
+          {intl.formatMessage(messages.resetPasswordError)}
+        </Toast>
+      )}
+      {showActivationToggleSuccess && toggleActivation.selectedUser && (
+        <Toast
+          id="activation_toggle_success"
+          type="success"
+          onClose={() => setShowActivationToggleSuccess(false)}
+        >
+          {intl.formatMessage(messages.toggleActivateStatusSuccess, {
+            name: getUserName(toggleActivation.selectedUser),
+            status:
+              toggleActivation.selectedUser?.status === 'active'
+                ? intl.formatMessage(messages.deactivated)
+                : intl.formatMessage(messages.active)
+          })}
+        </Toast>
+      )}
+      {showActivationToggleError && toggleActivation.selectedUser && (
+        <Toast
+          id="activation_toggle_error"
+          type="warning"
+          onClose={() => setShowActivationToggleError(false)}
+        >
+          {intl.formatMessage(messages.toggleActivateStatusError, {
+            name: getUserName(toggleActivation.selectedUser),
+            status:
+              toggleActivation.selectedUser?.status === 'active'
+                ? intl.formatMessage(messages.deactivated)
+                : intl.formatMessage(messages.active)
+          })}
+        </Toast>
+      )}
+    </>
+  )
+}
+
+export const UserList = connect((state: IStoreState) => ({
+  userDetails: getUserDetails(state)
+}))(withTheme(UserListComponent))

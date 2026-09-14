@@ -1,0 +1,290 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import type { Meta, StoryObj } from '@storybook/react'
+import React from 'react'
+import styled from 'styled-components'
+import { within, expect } from '@storybook/test'
+import { userEvent, waitFor } from '@storybook/testing-library'
+import {
+  ConditionalType,
+  FieldType,
+  not,
+  alwaysTrue,
+  generateTranslationConfig,
+  defineConditional
+} from '@opencrvs/commons/client'
+import {
+  FormFieldGenerator,
+  FormFieldGeneratorPropsWithoutRef
+} from '@client/v2-events/components/forms/FormFieldGenerator'
+import { TRPCProvider } from '@client/v2-events/trpc'
+import { withValidatorContext } from '../../../../../.storybook/decorators'
+
+const meta: Meta<FormFieldGeneratorPropsWithoutRef> = {
+  title: 'Inputs/Select',
+  parameters: {
+    chromatic: { disableSnapshot: true }
+  },
+  decorators: [
+    (Story, context) => (
+      <TRPCProvider>
+        <Story {...context} />
+      </TRPCProvider>
+    ),
+    withValidatorContext
+  ]
+}
+
+export default meta
+
+const StyledFormFieldGenerator = styled(FormFieldGenerator)`
+  width: 400px;
+`
+
+type Story = StoryObj<FormFieldGeneratorPropsWithoutRef>
+
+export const WithHiddenOption: Story = {
+  name: 'With hidden option',
+  parameters: {
+    layout: 'centered'
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const control = await waitFor(() => {
+      const el = canvasElement.querySelector('.react-select__control')
+      if (!el) {
+        throw new Error('Dropdown not found')
+      }
+      return el
+    })
+    await userEvent.click(control)
+
+    await expect(canvas.queryByText('Apple')).toBeInTheDocument()
+    await expect(canvas.queryByText('Banana')).not.toBeInTheDocument()
+    await expect(canvas.queryByText('Cherry')).toBeInTheDocument()
+  },
+  render: function Component(args) {
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={[
+          {
+            id: 'storybook.select',
+            type: FieldType.SELECT,
+            label: {
+              id: 'storybook.select.label',
+              defaultMessage: 'Favourite fruit',
+              description: 'The label for the select input'
+            },
+            options: [
+              {
+                value: 'apple',
+                label: {
+                  id: 'storybook.select.option.apple',
+                  defaultMessage: 'Apple',
+                  description: 'Apple option'
+                }
+              },
+              {
+                value: 'banana',
+                label: {
+                  id: 'storybook.select.option.banana',
+                  defaultMessage: 'Banana',
+                  description: 'Banana option'
+                },
+                conditionals: [
+                  {
+                    type: ConditionalType.SHOW,
+                    conditional: not(alwaysTrue())
+                  }
+                ]
+              },
+              {
+                value: 'cherry',
+                label: {
+                  id: 'storybook.select.option.cherry',
+                  defaultMessage: 'Cherry',
+                  description: 'Cherry option'
+                }
+              }
+            ]
+          }
+        ]}
+        id="my-form"
+      />
+    )
+  }
+}
+
+export const WithDisabledOption: Story = {
+  name: 'With disabled option',
+  parameters: {
+    layout: 'centered'
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const control = await waitFor(() => {
+      const el = canvasElement.querySelector('.react-select__control')
+      if (!el) {
+        throw new Error('Dropdown not found')
+      }
+      return el
+    })
+    await userEvent.click(control)
+    const bananaOption = canvas.queryByText('Banana')
+    await expect(bananaOption).toBeInTheDocument()
+    // this can be replaced with aria-disabled attribute once the react-select
+    // version in components package is upgraded
+    await expect(bananaOption).toHaveClass('react-select__option--is-disabled')
+    await expect(canvas.queryByText('Apple')).not.toHaveClass(
+      'react-select__option--is-disabled'
+    )
+    await expect(canvas.queryByText('Cherry')).not.toHaveClass(
+      'react-select__option--is-disabled'
+    )
+  },
+  render: function Component(args) {
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={[
+          {
+            id: 'storybook.select',
+            type: FieldType.SELECT,
+            label: {
+              id: 'storybook.select.label',
+              defaultMessage: 'Favourite fruit',
+              description: 'The label for the select input'
+            },
+            options: [
+              {
+                value: 'apple',
+                label: {
+                  id: 'storybook.select.option.apple',
+                  defaultMessage: 'Apple',
+                  description: 'Apple option'
+                }
+              },
+              {
+                value: 'banana',
+                label: {
+                  id: 'storybook.select.option.banana',
+                  defaultMessage: 'Banana',
+                  description: 'Banana option'
+                },
+                conditionals: [
+                  {
+                    type: ConditionalType.ENABLE,
+                    conditional: not(alwaysTrue())
+                  }
+                ]
+              },
+              {
+                value: 'cherry',
+                label: {
+                  id: 'storybook.select.option.cherry',
+                  defaultMessage: 'Cherry',
+                  description: 'Cherry option'
+                }
+              }
+            ]
+          }
+        ]}
+        id="my-form"
+      />
+    )
+  }
+}
+
+export const OptionsHideUnderlyingElement: Story = {
+  parameters: {
+    layout: 'centered'
+  },
+  play: async ({ canvasElement }) => {
+    const control = await waitFor(() => {
+      const el = canvasElement.querySelector('.react-select__control')
+      if (!el) {
+        throw new Error('Dropdown not found')
+      }
+      return el
+    })
+    await userEvent.click(control)
+  },
+  render: function Component(args) {
+    return (
+      <StyledFormFieldGenerator
+        {...args}
+        fields={[
+          {
+            id: 'storybook.select',
+            type: FieldType.SELECT,
+            label: {
+              id: 'storybook.select.label',
+              defaultMessage: 'Favourite fruit',
+              description: 'The label for the select input'
+            },
+            options: [
+              {
+                value: 'apple',
+                label: generateTranslationConfig('Apple')
+              },
+              {
+                value: 'banana',
+                label: generateTranslationConfig('Banana')
+              },
+              {
+                value: 'cherry',
+                label: generateTranslationConfig('Cherry')
+              },
+              {
+                value: 'Citrus',
+                label: generateTranslationConfig('Citrus')
+              },
+              {
+                value: 'Pear',
+                label: generateTranslationConfig('Pear')
+              },
+              {
+                value: 'Strawberry',
+                label: generateTranslationConfig('Strawberry')
+              }
+            ]
+          },
+          {
+            id: 'child.brn-search',
+            type: FieldType.SEARCH,
+            label: generateTranslationConfig('Farmer id'),
+            placeholder: generateTranslationConfig('Enter farmer id'),
+            helperText: generateTranslationConfig('Enter a 10-digit farmer id'),
+            configuration: {
+              validation: {
+                validator: defineConditional({
+                  type: 'string',
+                  pattern: '^[0-9]{10}$',
+                  description: 'Must be numeric and 10 digits long'
+                }),
+                message: generateTranslationConfig('Invalid value')
+              },
+              query: {
+                type: 'or' as const,
+                clauses: []
+              },
+              limit: 10,
+              offset: 0
+            }
+          }
+        ]}
+        id="my-form"
+      />
+    )
+  }
+}

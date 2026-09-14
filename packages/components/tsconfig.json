@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "outDir": "lib/",
+    "module": "ESNext",
+    "target": "es6",
+    "lib": ["es6", "dom", "es2019"],
+    "sourceMap": true,
+    "allowJs": false,
+    "declaration": true,
+    "jsx": "react",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "rootDir": "src",
+    "forceConsistentCasingInFileNames": true,
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noUnusedLocals": false,
+    "skipLibCheck": true,
+    "declarationMap": true
+  },
+  "include": ["src/**/*.tsx", "src/**/*.ts", ".storybook"],
+  "exclude": ["node_modules", "lib"]
+}

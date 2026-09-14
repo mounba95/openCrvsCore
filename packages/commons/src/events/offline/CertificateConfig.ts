@@ -1,0 +1,61 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import * as z from 'zod/v4'
+import { ShowConditional } from '../Conditional'
+import { TranslationConfig } from '../TranslationConfig'
+
+const FontFamily = z.object({
+  normal: z.string(),
+  bold: z.string(),
+  italics: z.string(),
+  bolditalics: z.string()
+})
+/**
+ * Represents API response from country-config
+ */
+export const CertificateConfig = z.object({
+  id: z.string(),
+  event: z.string(),
+  isV2Template: z.boolean().optional(),
+  label: TranslationConfig,
+  isDefault: z.boolean(),
+  fee: z.object({
+    onTime: z.number(),
+    late: z.number(),
+    delayed: z.number()
+  }),
+  svgUrl: z.string(),
+  fonts: z.record(z.string(), FontFamily).optional(),
+  conditionals: z.array(ShowConditional).optional(),
+  /**
+   * Niger : distingue les gabarits "copie conforme"/"copie intégrale" des
+   * gabarits "Volet 3"/transcription de jugement — seuls les premiers
+   * exigent la sélection de l'officier qui certifie la copie au moment de
+   * l'impression (voir useCertifierSelectorFieldConfig.ts, injecté sur la
+   * page d'impression au même titre que le sélecteur de gabarit).
+   */
+  isCertifiedCopy: z.boolean().optional()
+})
+
+export type CertificateConfig = z.infer<typeof CertificateConfig>
+
+/**
+ * Represents the way client uses it
+ */
+export const CertificateTemplateConfig = CertificateConfig.extend({
+  hash: z.string().optional(),
+  svg: z.string()
+})
+
+export type CertificateTemplateConfig = z.infer<
+  typeof CertificateTemplateConfig
+>

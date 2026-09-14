@@ -1,0 +1,58 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import {
+  createPrng,
+  generateUuid,
+  Location,
+  encodeScope
+} from '@opencrvs/commons'
+import { createTestClient, setupTestCase } from '@events/tests/utils'
+
+const scope = encodeScope({ type: 'user.data-seeding' })
+
+test('Returns single location in right format', async () => {
+  const { user } = await setupTestCase()
+  const client = createTestClient(user, [scope])
+
+  const initialLocations = await client.locations.list()
+
+  const setLocationPayload: Location[] = [
+    {
+      id: generateUuid(),
+      administrativeAreaId: null,
+      name: 'Location foobar',
+      validUntil: null,
+      locationType: 'CRVS_OFFICE',
+      externalId: 'abc123xyz456'
+    }
+  ]
+
+  await client.locations.set(setLocationPayload)
+
+  const locations = await client.locations.list()
+
+  expect(locations).toHaveLength(initialLocations.length + 1)
+  expect(locations).toMatchObject(initialLocations.concat(setLocationPayload))
+})
+
+test('Returns multiple locations', async () => {
+  const { user, generator } = await setupTestCase()
+  const client = createTestClient(user, [scope])
+
+  const initialLocations = await client.locations.list()
+
+  const locationRng = createPrng(845)
+  await client.locations.set(generator.locations.set(5, locationRng))
+
+  const locations = await client.locations.list()
+
+  expect(locations).toHaveLength(initialLocations.length + 5)
+})

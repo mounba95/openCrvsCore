@@ -1,0 +1,41 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+
+import { SystemVariables } from '@opencrvs/commons/client'
+import { getUsersFullName } from '../utils'
+import { useCurrentUser } from './useCurrentUser'
+
+/**
+ * Exposes template variables such as `$user` for components to replace field values or other templates
+ */
+export function useSystemVariables() {
+  const { currentUser: user } = useCurrentUser()
+
+  const variables = {
+    user: {
+      ...user,
+      name: getUsersFullName(user.name),
+      firstname: user.name.firstname,
+      surname: user.name.surname,
+      administrativeAreaId: user.administrativeAreaId ?? undefined
+    },
+    $window: {
+      location: {
+        href: window.location.href,
+        pathname: window.location.pathname,
+        hostname: window.location.hostname,
+        originPathname: window.location.origin + window.location.pathname
+      }
+    }
+  } satisfies SystemVariables
+
+  return variables
+}

@@ -1,0 +1,475 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import { ActionType } from '../ActionType'
+import { orderBy, findLast } from 'lodash'
+import {
+  Action,
+  ActionDocument,
+  ActionStatus,
+  ActionUpdate,
+  EventState,
+  PotentialDuplicate
+} from '../ActionDocument'
+import { EventDocument } from '../EventDocument'
+import { EventIndex } from '../EventIndex'
+import {
+  EventMetadata,
+  EventStatus,
+  ZodDate,
+  ZodDateTime
+} from '../EventMetadata'
+import { Draft } from '../Draft'
+import {
+  aggregateActionDeclarations,
+  deepMerge,
+  getAcceptedActions,
+  getCompleteActionAnnotation,
+  getMixedPath
+} from '../utils'
+import { getActionUpdateMetadata, getLegalStatuses } from './utils'
+import { EventConfig } from '../EventConfig'
+import { getEventFlags } from './flags'
+import { getUUID, UUID } from '../../uuid'
+import { DocumentPath } from '../../documents'
+import { AddressFieldValue, AddressType } from '../CompositeFieldValue'
+import { isFieldReference } from '../../conditionals/conditionals'
+
+export function getStatusFromActions(actions: Array<Action>) {
+  const acceptedActions = actions.filter(
+    ({ status }) => status === ActionStatus.Accepted
+  )
+
+  // ARCHIVE/UNARCHIVE don't represent real progress, they just park/unpark the
+  // record. Whether the record is currently archived is determined by which of
+  // the two happened most recently.
+  const isCurrentlyArchived = acceptedActions.reduce<boolean>(
+    (archived, action) => {
+      if (action.type === ActionType.ARCHIVE) {
+        return true
+      }
+      if (action.type === ActionType.UNARCHIVE) {
+        return false
+      }
+      return archived
+    },
+    false
+  )
+
+  if (isCurrentlyArchived) {
+    return EventStatus.enum.ARCHIVED
+  }
+
+  // Not currently archived: derive status as if archiving never happened, so
+  // unarchiving always restores exactly the status the record had before it
+  // was archived, no matter how many archive/unarchive cycles occurred.
+  return acceptedActions
+    .filter(
+      ({ type }) => type !== ActionType.ARCHIVE && type !== ActionType.UNARCHIVE
+    )
+    .reduce<EventStatus>((status, action) => {
+      switch (action.type) {
+        case ActionType.CREATE:
+          return EventStatus.enum.CREATED
+        case ActionType.DECLARE:
+          return EventStatus.enum.DECLARED
+        case ActionType.REGISTER:
+          return EventStatus.enum.REGISTERED
+        case ActionType.NOTIFY:
+          return EventStatus.enum.NOTIFIED
+        // Already filtered out above; listed here only to satisfy exhaustiveness.
+        case ActionType.ARCHIVE:
+        case ActionType.UNARCHIVE:
+        case ActionType.CUSTOM:
+        case ActionType.PRINT_CERTIFICATE:
+        case ActionType.ASSIGN:
+        case ActionType.UNASSIGN:
+        case ActionType.REJECT:
+        case ActionType.REQUEST_CORRECTION:
+        case ActionType.APPROVE_CORRECTION:
+        case ActionType.DUPLICATE_DETECTED:
+        case ActionType.MARK_AS_NOT_DUPLICATE:
+        case ActionType.MARK_AS_DUPLICATE:
+        case ActionType.REJECT_CORRECTION:
+        case ActionType.READ:
+        case ActionType.EDIT:
+        default:
+          return status
+      }
+    }, EventStatus.enum.CREATED)
+}
+
+export function getAssignedUserFromActions(actions: Array<ActionDocument>) {
+  return actions.reduce<null | string>((user, action) => {
+    if (action.type === ActionType.ASSIGN) {
+      return action.assignedTo
+    }
+    if (action.type === ActionType.UNASSIGN) {
+      return null
+    }
+
+    return user
+  }, null)
+}
+
+type NonNullableDeep<T> = T extends [unknown, ...unknown[]] // <-- ✨ tiny change: handle tuples first
+  ? { [K in keyof T]: NonNullableDeep<NonNullable<T[K]>> }
+  : T extends UUID
+    ? T
+    : T extends DocumentPath
+      ? T
+      : T extends string
+        ? NonNullable<T>
+        : T extends (infer U)[]
+          ? NonNullableDeep<U>[]
+          : T extends object
+            ? { [K in keyof T]: NonNullableDeep<NonNullable<T[K]>> }
+            : NonNullable<T>
+
+/**
+ * @returns Given arbitrary object, recursively remove all keys with null values
+ *
+ * @example
+ * deepDropNulls({ a: null, b: { c: null, d: 'foo' } }) // { b: { d: 'foo' } }
+ *
+ */
+export function deepDropNulls<T>(obj: T): NonNullableDeep<T> {
+  if (Array.isArray(obj)) {
+    return obj.map(deepDropNulls) as NonNullableDeep<T>
+  }
+
+  if (obj !== null && typeof obj === 'object') {
+    return Object.entries(obj).reduce((acc, [key, value]) => {
+      const cleanedValue = deepDropNulls(value)
+      if (cleanedValue !== null) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(acc as any)[key] = cleanedValue
+      }
+      return acc
+    }, {} as NonNullableDeep<T>)
+  }
+
+  return obj as NonNullableDeep<T>
+}
+
+export function isUndeclaredDraft(status: EventStatus): boolean {
+  return status === EventStatus.enum.CREATED
+}
+
+export const DEFAULT_DATE_OF_EVENT_PROPERTY =
+  'createdAt' satisfies keyof EventDocument
+
+function extractDateString(dateTime: string): string {
+  return dateTime.split('T')[0]
+}
+
+export function resolveDateOfEvent(
+  eventIndex: EventIndex,
+  declaration: EventState,
+  config: EventConfig
+) {
+  if (!config.dateOfEvent) {
+    return extractDateString(eventIndex[DEFAULT_DATE_OF_EVENT_PROPERTY])
+  }
+
+  // If dateOfEvent is a field reference, we need to extract the date from the declaration using the field id.
+  // Otherwise, we extract it from the event index using the event reference.
+  // i.e. event('legalStatuses.REGISTERED.acceptedAt') will look for the acceptedAt field in the legalStatuses object
+  // in the event metadata in EventIndex, whereas field('child.dob') will look for the dob field in the declaration.
+  const parsedDate = isFieldReference(config.dateOfEvent)
+    ? ZodDate.safeParse(declaration[config.dateOfEvent.$$field])
+    : ZodDateTime.safeParse(
+        getMixedPath(eventIndex, config.dateOfEvent.$$event)
+      )
+
+  return parsedDate.success ? extractDateString(parsedDate.data) : undefined
+}
+
+export const DEFAULT_PLACE_OF_EVENT_PROPERTY =
+  'createdAtLocation' satisfies keyof EventMetadata
+
+/**
+ *
+ * @param value value to parse
+ * @param oldValue fallback value, its needed when the value is invalid but we want
+ * to keep the previous valid value, since this can be used mutliple times in one flow
+ * @returns successfully parsed UUID or fallback value
+ */
+function getParsedUUID(value: unknown, oldValue?: UUID) {
+  const parsed = UUID.safeParse(value)
+  return parsed.success ? parsed.data : oldValue
+}
+
+export function resolvePlaceOfEvent(
+  eventMetadata: {
+    createdAtLocation?: UUID | undefined | null
+  },
+  declaration: EventState,
+  config: EventConfig
+): UUID | undefined | null {
+  let placeOfEvent: UUID | undefined | null = getParsedUUID(
+    eventMetadata[DEFAULT_PLACE_OF_EVENT_PROPERTY]
+  )
+
+  if (config.placeOfEvent) {
+    const addressFieldValue = AddressFieldValue.safeParse(
+      declaration[config.placeOfEvent.$$field]
+    )
+    if (
+      addressFieldValue.success &&
+      addressFieldValue.data.addressType === AddressType.DOMESTIC &&
+      addressFieldValue.data.administrativeArea
+    ) {
+      placeOfEvent = getParsedUUID(
+        addressFieldValue.data.administrativeArea,
+        placeOfEvent
+      )
+    } else {
+      placeOfEvent = getParsedUUID(
+        declaration[config.placeOfEvent.$$field],
+        placeOfEvent
+      )
+    }
+  }
+  return placeOfEvent
+}
+
+export function extractPotentialDuplicatesFromActions(
+  actions: Action[]
+): PotentialDuplicate[] {
+  return actions.reduce<PotentialDuplicate[]>((duplicates, action) => {
+    if (action.type === ActionType.DUPLICATE_DETECTED) {
+      duplicates = action.content.duplicates
+    }
+    if (
+      action.type === ActionType.MARK_AS_NOT_DUPLICATE ||
+      action.type === ActionType.MARK_AS_DUPLICATE
+    ) {
+      duplicates = []
+    }
+    return duplicates
+  }, [])
+}
+
+/**
+ * NOTE: This function should not run field validations. It should return the state based on the actions, without considering context (users, roles, permissions, etc).
+ *
+ * If you update this function, please ensure @EventIndex type is updated accordingly.
+ * In most cases, you won't need to add new parameters to this function. Discuss with the team before doing so.
+ *
+ * @returns Calculates a snapshot summary of the event based on the actions taken on it.
+ * @see EventIndex for the description of the returned object.
+ */
+export function getCurrentEventState(
+  event: EventDocument,
+  config: EventConfig
+): EventIndex {
+  // Always work with sorted event actions
+  const sortedActions = event.actions
+    .slice()
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+
+  const creationAction = sortedActions.find(
+    (action) => action.type === ActionType.CREATE
+  )
+
+  if (!creationAction) {
+    throw new Error(`Event ${event.id} has no creation action`)
+  }
+
+  const acceptedActions = getAcceptedActions(event).sort((a, b) =>
+    a.createdAt.localeCompare(b.createdAt)
+  )
+
+  // Includes the metadata of the last action. Whether it was a 'request' by user or 'accept' by user or 3rd party.
+  const requestActionMetadata = getActionUpdateMetadata(sortedActions)
+
+  // Includes only accepted actions metadata. Sometimes (e.g. on updatedAt) we want to show the accepted timestamp rather than the request timestamp.
+  const acceptedActionMetadata = getActionUpdateMetadata(acceptedActions)
+
+  const declaration = aggregateActionDeclarations(event)
+  const status = getStatusFromActions(sortedActions)
+  const legalStatuses = getLegalStatuses(sortedActions)
+
+  const base = deepDropNulls({
+    id: event.id,
+    type: event.type,
+    status,
+    legalStatuses,
+    createdAt: creationAction.createdAt,
+    createdBy: creationAction.createdBy,
+    createdByUserType: creationAction.createdByUserType,
+    createdAtLocation: creationAction.createdAtLocation,
+    updatedAt: acceptedActionMetadata.createdAt,
+    assignedTo: getAssignedUserFromActions(acceptedActions),
+    updatedBy: requestActionMetadata.createdBy,
+    updatedAtLocation: requestActionMetadata.createdAtLocation,
+    declaration,
+    trackingId: event.trackingId,
+    updatedByUserRole: requestActionMetadata.createdByRole,
+    placeOfEvent: resolvePlaceOfEvent(
+      { createdAtLocation: creationAction.createdAtLocation },
+      declaration,
+      config
+    ),
+    potentialDuplicates: extractPotentialDuplicatesFromActions(sortedActions),
+    flags: getEventFlags(event, config)
+  })
+
+  return deepDropNulls({
+    ...base,
+    dateOfEvent: resolveDateOfEvent(base, declaration, config)
+  })
+}
+
+/**
+ * @returns the future state of the event with drafts applied to all fields.
+ *
+ * NOTE: We treat the draft as a new action that is applied to the event. This means that even the status of the is changed as if draft has been accepted.
+ * @see applyDraftToEventIndex to apply the draft to the event without changing the status.
+ *
+ */
+export function dangerouslyGetCurrentEventStateWithDrafts({
+  event,
+  draft,
+  configuration
+}: {
+  event: EventDocument
+  draft: Draft
+  configuration: EventConfig
+}): EventIndex {
+  const actions = event.actions
+    .slice()
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+
+  const draftActions: ActionDocument[] =
+    draft.action.type === ActionType.REQUEST_CORRECTION
+      ? /*
+         * If the action encountered is "REQUEST_CORRECTION", we want to pretend like it was approved
+         * so previews etc are shown correctly
+         */
+        [
+          draft.action as ActionDocument,
+          {
+            id: getUUID(),
+            ...draft.action,
+            type: ActionType.APPROVE_CORRECTION
+          } as ActionDocument
+        ]
+      : [{ ...draft.action, id: getUUID() } as ActionDocument]
+
+  const actionsWithDraft = orderBy(
+    [...actions, ...draftActions],
+    ['createdAt'],
+    'asc'
+  )
+
+  const eventWithDraft: EventDocument = {
+    ...event,
+    actions: actionsWithDraft
+  }
+
+  return getCurrentEventState(eventWithDraft, configuration)
+}
+
+export function applyDeclarationToEventIndex(
+  eventIndex: EventIndex,
+  declaration: EventState | ActionUpdate,
+  eventConfiguration: EventConfig
+): EventIndex {
+  const updatedDeclaration = deepMerge(eventIndex.declaration, declaration)
+  return {
+    ...eventIndex,
+    dateOfEvent: resolveDateOfEvent(
+      eventIndex,
+      updatedDeclaration,
+      eventConfiguration
+    ),
+    placeOfEvent: resolvePlaceOfEvent(
+      eventIndex,
+      updatedDeclaration,
+      eventConfiguration
+    ),
+    declaration: updatedDeclaration
+  }
+}
+
+/**
+ * Applies draft to the event index following internal business rules.
+ *
+ * Ensures only necessary fields are updated based on the draft (declaration, updatedAt, flags).
+ * NOTE: When naively applying draft, it leads to incorrect event state, since drafts are 'Accepted' by default.
+ *
+ */
+export function applyDraftToEventIndex(
+  eventIndex: EventIndex,
+  draft: Draft,
+  eventConfiguration: EventConfig
+) {
+  return applyDeclarationToEventIndex(
+    {
+      ...eventIndex,
+      updatedAt: draft.createdAt
+    },
+    draft.action.declaration,
+    eventConfiguration
+  )
+}
+
+/**
+ * Annotation is always specific to the action. when action with annotation is triggered multiple times,
+ * previous annotations should have no effect on the new action annotation. (e.g. printing once should not pre-select print form fields)
+ *
+ * @returns annotation generated from drafts
+ */
+export function getAnnotationFromDrafts(drafts: Draft[]) {
+  const actions = drafts.map((draft) => draft.action)
+
+  const annotation = actions.reduce((ann, action) => {
+    return deepMerge(ann, action.annotation ?? {})
+  }, {})
+
+  return deepDropNulls(annotation)
+}
+
+export function getActionAnnotation({
+  event,
+  actionType,
+  draft
+}: {
+  event: EventDocument
+  actionType: ActionType
+  draft?: Draft
+}): EventState {
+  const activeActions = getAcceptedActions(event)
+
+  const action = findLast(activeActions, (a) => a.type === actionType)
+
+  const actionWithCompleteAnnotation = action && {
+    ...action,
+    annotation: getCompleteActionAnnotation(event, action)
+  }
+
+  const matchingDraft = draft?.action.type === actionType ? draft : undefined
+
+  const sortedActions = orderBy(
+    [actionWithCompleteAnnotation, matchingDraft?.action].filter(
+      (a) => a !== undefined
+    ),
+    'createdAt',
+    'asc'
+  )
+
+  const annotation = sortedActions.reduce((ann, sortedAction) => {
+    return deepMerge(ann, sortedAction.annotation ?? {})
+  }, {})
+
+  return deepDropNulls(annotation)
+}

@@ -1,0 +1,172 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import { AuthServer } from '@auth/server'
+import { createProductionEnvironmentServer } from '@auth/tests/util'
+import { encodeScope } from '@opencrvs/commons'
+import * as fetchMock from 'jest-fetch-mock'
+import { DEFAULT_ROLES_DEFINITION } from '@auth/features/authenticate/handler.test'
+
+jest.mock('@opencrvs/commons', () => {
+  const actual = jest.requireActual('@opencrvs/commons')
+  return {
+    __esModule: true,
+    ...actual,
+    triggerUserEventNotification: jest.fn()
+  }
+})
+
+const fetch: fetchMock.FetchMock = fetchMock as fetchMock.FetchMock
+import { AuthenticateResponse } from '@auth/features/authenticate/handler'
+
+describe('authenticate handler receives a request', () => {
+  let server: AuthServer
+
+  beforeEach(async () => {
+    server = await createProductionEnvironmentServer()
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+    const authService = require('../authenticate/service')
+    jest.spyOn(authService, 'recordUserAuditEvent').mockImplementation(() => {})
+  })
+
+  describe('events service says credentials are valid', () => {
+    it('verifies a code and generates a token', async () => {
+      /* eslint-disable @typescript-eslint/no-require-imports */
+      /* eslint-disable @typescript-eslint/no-var-requires */
+      const codeService = require('./service')
+
+      const authService = require('../authenticate/service')
+      const codeSpy = jest.spyOn(codeService, 'sendVerificationCode')
+
+      fetch.mockResponseOnce(JSON.stringify(DEFAULT_ROLES_DEFINITION), {
+        status: 200
+      })
+      jest.spyOn(authService, 'authenticate').mockReturnValue({
+        name: [
+          {
+            use: 'en',
+            family: 'Anik',
+            given: ['Sadman']
+          }
+        ],
+        userId: '1',
+        role: 'NATIONAL_SYSTEM_ADMIN',
+        status: 'active',
+        mobile: '+345345343',
+        email: 'test@test.org'
+      })
+
+      const authRes: { result?: AuthenticateResponse } =
+        await server.server.inject({
+          method: 'POST',
+          url: '/authenticate',
+          payload: {
+            username: '+345345343',
+            password: '2r23432'
+          }
+        })
+      const authCode = codeSpy.mock.calls[0][0]
+
+      expect(authRes.result).toBeDefined()
+
+      const res: { result?: { token: string } } = await server.server.inject({
+        method: 'POST',
+        url: '/verifyCode',
+        payload: {
+          nonce: authRes.result!.nonce,
+          code: authCode
+        }
+      })
+
+      expect(res.result).toBeDefined()
+      expect(res.result!.token.split('.')).toHaveLength(3)
+      const [, payload] = res.result!.token.split('.')
+      const body = JSON.parse(Buffer.from(payload, 'base64').toString())
+      expect(body.scope).toEqual([
+        encodeScope({ type: 'user.create' }),
+        encodeScope({ type: 'user.read' }),
+        encodeScope({ type: 'user.edit' }),
+        encodeScope({ type: 'organisation.read-locations' }),
+        encodeScope({ type: 'performance.read' }),
+        encodeScope({ type: 'performance.read-dashboards' }),
+        encodeScope({ type: 'performance.vital-statistics-export' })
+      ])
+      expect(body.sub).toBe('1')
+    })
+  })
+  it('returns both an access token and a refresh token', async () => {
+    fetch.mockResponseOnce(JSON.stringify(DEFAULT_ROLES_DEFINITION), {
+      status: 200
+    })
+    const authService = require('../authenticate/service')
+    const codeService = require('./service')
+    const codeSpy = jest.spyOn(codeService, 'sendVerificationCode')
+    jest.spyOn(authService, 'authenticate').mockReturnValue({
+      userId: '1',
+      role: 'NATIONAL_SYSTEM_ADMIN',
+      mobile: '+345345343'
+    })
+
+    const authRes: { result?: { nonce: string } } = await server.server.inject({
+      method: 'POST',
+      url: '/authenticate',
+      payload: { username: '+345345343', password: '2r23432' }
+    })
+    const code = codeSpy.mock.calls[0][0]
+
+    const res: { result?: { token: string; refreshToken: string } } =
+      await server.server.inject({
+        method: 'POST',
+        url: '/verifyCode',
+        payload: { nonce: authRes.result!.nonce, code }
+      })
+
+    expect(res.result!.token).toBeDefined()
+    expect(res.result!.refreshToken).toBeDefined()
+    const [, payload] = res.result!.refreshToken.split('.')
+    const body = JSON.parse(Buffer.from(payload, 'base64').toString())
+    expect(body.aud).toContain('opencrvs:auth-refresh')
+    expect(body.sub).toBe('1')
+  })
+
+  describe('user auth service says credentials are invalid', () => {
+    it('returns a 401 if the code is bad', async () => {
+      const authService = require('../authenticate/service')
+      jest.spyOn(authService, 'authenticate').mockReturnValue({
+        id: '1',
+        scope: ['admin'],
+        status: 'active',
+        mobile: '+345345343'
+      })
+      const authRes: { result?: AuthenticateResponse } =
+        await server.server.inject({
+          method: 'POST',
+          url: '/authenticate',
+          payload: {
+            mobile: '+345345343',
+            password: '2r23432'
+          }
+        })
+      const badCode = '1'
+
+      expect(authRes.result).toBeDefined()
+
+      const res = await server.server.inject({
+        method: 'POST',
+        url: '/verifyCode',
+        payload: {
+          nonce: authRes.result!.nonce,
+          code: badCode
+        }
+      })
+      expect(res.statusCode).toBe(401)
+    })
+  })
+})

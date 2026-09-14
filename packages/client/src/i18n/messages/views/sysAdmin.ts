@@ -1,0 +1,182 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import { defineMessages, MessageDescriptor } from 'react-intl'
+
+interface ISysAdminMessages
+  extends Record<string | number | symbol, MessageDescriptor> {
+  deactivate: MessageDescriptor
+  deactivateUserTitle: MessageDescriptor
+  deactivateUserSubtitle: MessageDescriptor
+  editUserDetailsTitle: MessageDescriptor
+  reactivate: MessageDescriptor
+  reactivateUserTitle: MessageDescriptor
+  resetUserPasswordTitle: MessageDescriptor
+  resetUserPasswordModalTitle: MessageDescriptor
+  resetUserPasswordModalMessage: MessageDescriptor
+  reactivateUserSubtitle: MessageDescriptor
+  resendInvite: MessageDescriptor
+  resendInviteSuccess: MessageDescriptor
+  resendInviteError: MessageDescriptor
+  sendUsernameReminderInvite: MessageDescriptor
+  sendUsernameReminderInviteSuccess: MessageDescriptor
+  sendUsernameReminderInviteError: MessageDescriptor
+  sendUsernameReminderInviteModalMessage: MessageDescriptor
+  sendUsernameReminderInviteModalTitle: MessageDescriptor
+  resetPasswordSuccess: MessageDescriptor
+  resetPasswordError: MessageDescriptor
+  active: MessageDescriptor
+  pending: MessageDescriptor
+  disabled: MessageDescriptor
+  deactivated: MessageDescriptor
+}
+
+const messagesToDefine: ISysAdminMessages = {
+  deactivate: {
+    defaultMessage: 'Deactivate',
+    description: 'Label for toggle menu option deactivate',
+    id: 'sysAdHome.user.deactivate'
+  },
+  deactivateUserTitle: {
+    id: 'sysAdHome.user.audit.deactivation.title',
+    defaultMessage: 'Deactivate {name}?',
+    description: 'The title of user deactivation confirmation modal'
+  },
+  deactivateUserSubtitle: {
+    id: 'sysAdHome.user.audit.deactivation.subtitle',
+    defaultMessage:
+      'This will revoke {name}’s ability to login and access the system. The account can be reactivated at a later date.',
+    description: 'The subtitle of user deactivation confirmation modal'
+  },
+  editUserDetailsTitle: {
+    defaultMessage: 'Edit details',
+    description: 'Title for edit user details',
+    id: 'sysAdHome.user.header'
+  },
+  resetUserPasswordTitle: {
+    defaultMessage: 'Reset Password',
+    description: 'Title for reset user password',
+    id: 'sysAdHome.user.resetpassword.title'
+  },
+  resetUserPasswordModalTitle: {
+    defaultMessage: 'Reset password?',
+    description: 'Title for reset user password modal',
+    id: 'sysAdHome.user.resetPasswordModal.title'
+  },
+  resetUserPasswordModalMessage: {
+    id: 'sysAdHome.user.resetPasswordModal.message',
+    defaultMessage:
+      'The user will receive a temporary password via {deliveryMethod} sent to {recipient}. They will then be prompted to create a new password on successful login',
+    description: 'Message for reset password modal'
+  },
+  reactivateUserTitle: {
+    id: 'sysAdHome.user.audit.reactivation.title',
+    defaultMessage: 'Reactivate {name}?',
+    description: 'The title of user reactivation confirmation modal'
+  },
+  reactivateUserSubtitle: {
+    id: 'sysAdHome.user.audit.reactivation.subtitle',
+    defaultMessage:
+      'This will reactivate {name}’s ability to login and access the system.',
+    description: 'The subtitle of user reactivation confirmation modal'
+  },
+  reactivate: {
+    defaultMessage: 'Reactivate',
+    description: 'Label for toggle menu option reactivate',
+    id: 'sysAdHome.user.reactivate'
+  },
+  resendInvite: {
+    defaultMessage: 'Resend invite',
+    description: 'The label for menu option resend invitation',
+    id: 'sysAdHome.resendInvite'
+  },
+  resendInviteSuccess: {
+    defaultMessage: 'Invite sent',
+    description: 'The label for success notification of resend invite',
+    id: 'sysAdHome.resendInviteSuccess'
+  },
+  resendInviteError: {
+    defaultMessage: 'Invite could not be sent',
+    description: 'The label for error notification of resend invite',
+    id: 'sysAdHome.resendInviteError'
+  },
+  sendUsernameReminderInvite: {
+    defaultMessage: 'Send username reminder',
+    description: 'The label for menu option to send username reminder',
+    id: 'sysAdHome.sendUsernameReminderInvite'
+  },
+  sendUsernameReminderInviteSuccess: {
+    defaultMessage: 'Username reminder sent to {name}',
+    description: 'The label for success notification of send username reminder',
+    id: 'sysAdHome.sendUsernameReminderInviteSuccess'
+  },
+  sendUsernameReminderInviteError: {
+    defaultMessage: 'Username reminder could not be sent',
+    description: 'The label for error notification of send username reminder',
+    id: 'sysAdHome.sendUsernameReminderInviteError'
+  },
+  sendUsernameReminderInviteModalTitle: {
+    defaultMessage: 'Send username reminder?',
+    description: 'Title for send username reminder',
+    id: 'sysAdHome.sendUsernameReminderInviteModalTitle'
+  },
+  sendUsernameReminderInviteModalMessage: {
+    defaultMessage:
+      'The user will receive a username reminder via an {deliveryMethod} sent to {recipient}',
+    description: 'Message for send username reminder',
+    id: 'sysAdHome.sendUsernameReminderInviteModalMessage'
+  },
+  resetPasswordSuccess: {
+    defaultMessage: 'Temporary password sent to {username}',
+    description:
+      'The label for success notification of reset password sms invite',
+    id: 'sysAdHome.resentPasswordSuccess'
+  },
+  resetPasswordError: {
+    defaultMessage: 'Temporary password could not be sent',
+    description:
+      'The label for error notification of reset password sms invite',
+    id: 'sysAdHome.resentPasswordError'
+  },
+  active: {
+    defaultMessage: 'Active',
+    description: 'Pill label for active user',
+    id: 'system.user.active'
+  },
+  pending: {
+    defaultMessage: 'Pending',
+    description: 'Pill label for pending user',
+    id: 'system.user.pending'
+  },
+  disabled: {
+    defaultMessage: 'Disabled',
+    description: 'Pill label for disabled user',
+    id: 'system.user.disabled'
+  },
+  deactivated: {
+    defaultMessage: 'Deactivated',
+    description: 'Pill label for deactivated user',
+    id: 'system.user.deactivated'
+  },
+  toggleActivateStatusSuccess: {
+    defaultMessage: 'Updated {name}\'s account status to "{status}"',
+    description:
+      'The label for success notification when toggling user activate status',
+    id: 'sysAdHome.toggleActivateStatusSuccess'
+  },
+  toggleActivateStatusError: {
+    defaultMessage: 'Failed to update {name}\'s account status to "{status}"',
+    description:
+      'The label for error notification when toggling user activate status',
+    id: 'sysAdHome.toggleActivateStatusError'
+  }
+}
+
+export const messages: ISysAdminMessages = defineMessages(messagesToDefine)

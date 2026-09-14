@@ -1,0 +1,75 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * OpenCRVS is also distributed under the terms of the Civil Registration
+ * & Healthcare Disclaimer located at http://opencrvs.org/license.
+ *
+ * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
+ */
+import {
+  AnyAction,
+  applyMiddleware,
+  compose,
+  createStore as createReduxStore,
+  Store,
+  StoreEnhancer
+} from 'redux'
+import { combineReducers, getModel, install, StoreCreator } from 'redux-loop'
+import { intlReducer, IntlState } from '@client/i18n/reducer'
+import {
+  notificationReducer,
+  NotificationState
+} from '@client/notification/reducer'
+import { IOfflineDataState, offlineDataReducer } from '@client/offline/reducer'
+import { profileReducer, ProfileState } from '@client/profile/profileReducer'
+import { IUserFormState, userFormReducer } from '@client/user/userReducer'
+import * as Sentry from '@sentry/react'
+import createSentryMiddleware from 'redux-sentry-middleware'
+
+import { persistenceMiddleware } from './utils/persistence/persistenceMiddleware'
+
+export interface IStoreState {
+  profile: ProfileState
+  i18n: IntlState
+  notification: NotificationState
+  offline: IOfflineDataState
+  userForm: IUserFormState
+}
+
+const enhancedCreateStore = createReduxStore as StoreCreator
+
+export type AppStore = Store<IStoreState, AnyAction>
+
+const config = { DONT_LOG_ERRORS_ON_HANDLED_FAILURES: true }
+
+export const createStore = (): { store: AppStore } => {
+  const reducers = combineReducers<IStoreState>({
+    profile: profileReducer,
+    i18n: intlReducer,
+    notification: notificationReducer,
+    offline: offlineDataReducer,
+    userForm: userFormReducer
+  })
+  // @ts-ignore
+  const enhancer = compose(
+    install(config),
+    applyMiddleware(persistenceMiddleware),
+    // @ts-ignore types are not correct for this module yet
+    applyMiddleware(createSentryMiddleware(Sentry)),
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    typeof (window as any).__REDUX_DEVTOOLS_EXTENSION__ !== 'undefined'
+      ? /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+        (window as any).__REDUX_DEVTOOLS_EXTENSION__()
+      : /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+        (f: any) => f
+  ) as StoreEnhancer<IStoreState>
+
+  const store = enhancedCreateStore<IStoreState, AnyAction>(
+    reducers,
+    getModel(reducers(undefined, { type: 'NOOP' })),
+    enhancer
+  )
+  return { store }
+}
